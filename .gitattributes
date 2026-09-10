@@ -1,0 +1,6 @@
+# 仓库内文本一律按 LF 存储，避免跨平台克隆时 run.sh 被写入 CRLF（会破坏 shebang）
+* text=auto
+
+# Windows 脚本检出时用 CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
