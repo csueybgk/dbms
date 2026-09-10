@@ -6,6 +6,8 @@ import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
 import com.course.dbms.compiler.ast.CreateStmt;
 import com.course.dbms.compiler.ast.InsertStmt;
+import com.course.dbms.compiler.ast.DeleteStmt;
+import com.course.dbms.compiler.ast.UpdateStmt;
 import com.course.dbms.compiler.ast.SelectItem;
 import com.course.dbms.compiler.ast.SelectStmt;
 import com.course.dbms.compiler.ast.ShowStmt;
@@ -64,6 +66,8 @@ public class Parser {
         switch (peek().type) {
             case CREATE:   return parseCreate();
             case INSERT:   return parseInsert();
+            case DELETE:   return parseDelete();
+            case UPDATE:   return parseUpdate();
             case SELECT:   return parseSelect();
             case SHOW:     return parseShow();
             case BEGIN:    return parseTx(TxOp.BEGIN);
@@ -131,6 +135,28 @@ public class Parser {
         } while (match(TokenType.COMMA));
         expect(TokenType.RPAREN);
         return new InsertStmt(name, values);
+    }
+
+    private Stmt parseDelete() {
+        expect(TokenType.DELETE);
+        expect(TokenType.FROM);
+        String table = expectIdent();
+        return new DeleteStmt(table, match(TokenType.WHERE) ? parseCond() : null);
+    }
+
+    private Stmt parseUpdate() {
+        expect(TokenType.UPDATE);
+        String table = expectIdent();
+        expect(TokenType.SET);
+        java.util.Map<String, Object> assignments = new java.util.LinkedHashMap<>();
+        do {
+            String column = expectIdent().toLowerCase(java.util.Locale.ROOT);
+            Token op = expect(TokenType.OPERATOR);
+            if (!"=".equals(op.value)) throw err(op, "expected = in SET");
+            if (assignments.containsKey(column)) throw err(op, "duplicate assignment: " + column);
+            assignments.put(column, expectLiteral());
+        } while (match(TokenType.COMMA));
+        return new UpdateStmt(table, match(TokenType.WHERE) ? parseCond() : null, assignments);
     }
 
     private Stmt parseSelect() {

@@ -6,6 +6,8 @@ import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
 import com.course.dbms.compiler.ast.CreateStmt;
 import com.course.dbms.compiler.ast.InsertStmt;
+import com.course.dbms.compiler.ast.DeleteStmt;
+import com.course.dbms.compiler.ast.UpdateStmt;
 import com.course.dbms.compiler.ast.SelectItem;
 import com.course.dbms.compiler.ast.SelectStmt;
 import com.course.dbms.compiler.ast.ShowStmt;
@@ -49,6 +51,13 @@ public class Analyzer {
         if (stmt instanceof CreateStmt) analyzeCreate((CreateStmt) stmt);
         else if (stmt instanceof CreateIndexStmt) analyzeCreateIndex((CreateIndexStmt) stmt);
         else if (stmt instanceof InsertStmt) analyzeInsert((InsertStmt) stmt);
+        else if (stmt instanceof DeleteStmt) {
+            DeleteStmt d = (DeleteStmt) stmt;
+            analyzeMutation(d.tableName, d.where, java.util.Collections.emptyMap());
+        } else if (stmt instanceof UpdateStmt) {
+            UpdateStmt u = (UpdateStmt) stmt;
+            analyzeMutation(u.tableName, u.where, u.assignments);
+        }
         else if (stmt instanceof SelectStmt) analyzeSelect((SelectStmt) stmt);
         else if (stmt instanceof ShowStmt) analyzeShow((ShowStmt) stmt);
         else if (stmt instanceof TxnStmt) { /* 事务控制语句由 Session 拦截，无静态校验 */ }
@@ -89,6 +98,17 @@ public class Analyzer {
         }
         for (int i = 0; i < schema.columnCount(); i++) {
             StorageEngine.cast(schema, i, ins.values.get(i)); // SE-0005 on type mismatch
+        }
+    }
+
+    private void analyzeMutation(String name, Cond where, java.util.Map<String, Object> assignments) {
+        Table table = catalog.getTable(name);
+        CombinedSchema cs = new CombinedSchema();
+        for (Column column : table.schema().columns()) cs.add(table.name(), column.name(), column.type());
+        if (where != null) checkCondRich(cs, where);
+        for (java.util.Map.Entry<String, Object> entry : assignments.entrySet()) {
+            requireColumn(table, entry.getKey());
+            StorageEngine.cast(table.schema(), table.schema().indexOf(entry.getKey()), entry.getValue());
         }
     }
 

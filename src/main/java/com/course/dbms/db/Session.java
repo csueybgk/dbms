@@ -4,6 +4,8 @@ import com.course.dbms.common.Error;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
 import com.course.dbms.compiler.ast.CreateStmt;
 import com.course.dbms.compiler.ast.InsertStmt;
+import com.course.dbms.compiler.ast.DeleteStmt;
+import com.course.dbms.compiler.ast.UpdateStmt;
 import com.course.dbms.compiler.ast.SelectStmt;
 import com.course.dbms.compiler.ast.ShowStmt;
 import com.course.dbms.compiler.ast.Stmt;
@@ -141,8 +143,10 @@ public class Session {
                 Table t = db.catalog().getTable(sel.tableName);
                 req.add(new int[]{t.tableId(), 0});
             }
-        } else if (stmt instanceof InsertStmt) {
-            Table t = db.catalog().getTable(((InsertStmt) stmt).tableName);
+        } else if (stmt instanceof InsertStmt || stmt instanceof DeleteStmt || stmt instanceof UpdateStmt) {
+            String name = stmt instanceof InsertStmt ? ((InsertStmt) stmt).tableName
+                    : stmt instanceof DeleteStmt ? ((DeleteStmt) stmt).tableName : ((UpdateStmt) stmt).tableName;
+            Table t = db.catalog().getTable(name);
             req.add(new int[]{SYS_TABLES, 0});
             req.add(new int[]{t.tableId(), 1});
         } else if (stmt instanceof CreateStmt) {

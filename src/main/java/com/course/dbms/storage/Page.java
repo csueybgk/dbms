@@ -93,20 +93,50 @@ public class Page {
     public int addRecord(byte[] rec) {
         int count = recordCount();
         int start = freeStart();
-        int needSlot = (count + 1) * SLOT_SIZE;
+        int slot = 0;
+        while (slot < count && slotLength(slot) > 0) slot++;
+        int newCount = slot == count ? count + 1 : count;
+        int needSlot = newCount * SLOT_SIZE;
         if (start + rec.length + needSlot > SIZE) {
             return -1;
         }
         // 写入记录数据
         System.arraycopy(rec, 0, data, start, rec.length);
         // 写入槽位 [offset, length]
-        int addr = slotAddr(count);
+        int addr = slotAddr(slot);
         putShort(addr, (short) start);
         putShort(addr + 2, (short) rec.length);
         // 更新头
-        putInt(OFF_REC_COUNT, count + 1);
+        putInt(OFF_REC_COUNT, newCount);
         putShort(OFF_FREE_START, (short) (start + rec.length));
-        return count;
+        return slot;
+    }
+
+    /** 删除并压缩记录区，保留其他记录的槽位编号。 */
+    public boolean deleteRecord(int slot) {
+        if (getRecord(slot) == null) return false;
+        replaceRecord(slot, new byte[0]);
+        return true;
+    }
+
+    /** 原槽位更新；空间不足不改页，由上层迁移记录。空数组代表删除。 */
+    public boolean replaceRecord(int slot, byte[] record) {
+        byte[] old = getRecord(slot);
+        if (old == null || record.length > freeSpace() + old.length) return false;
+        byte[] snapshot = data.clone();
+        int start = HEADER_SIZE;
+        for (int i = 0; i < recordCount(); i++) {
+            int length = i == slot ? record.length : slotLength(i);
+            int offset = slotOffset(i);
+            if (i == slot) System.arraycopy(record, 0, data, start, length);
+            else System.arraycopy(snapshot, offset, data, start, length);
+            putShort(slotAddr(i), (short) start);
+            putShort(slotAddr(i) + 2, (short) length);
+            start += length;
+        }
+        Arrays.fill(data, start, SIZE - recordCount() * SLOT_SIZE, (byte) 0);
+        putShort(OFF_FREE_START, (short) start);
+        return true;
     }
 
     /** 读回第 i 条记录；越界或空槽位返回 null。 */

@@ -11,8 +11,7 @@ import java.util.List;
 /**
  * 插入算子（DML，叶子动作）：把一行写入目标表，返回受影响行数。
  *
- * 插入成功后顺手把这行的 RID 记进该表上的所有索引（本系统没有 delete/update，
- * insert 是唯一写路径，所以索引维护一处钩子即可覆盖）。
+ * 插入成功后把这行的 RID 记进该表上的所有索引。
  */
 public class Insert extends Operator {
 

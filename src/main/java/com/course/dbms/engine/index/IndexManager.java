@@ -16,8 +16,7 @@ import java.util.Map;
  *
  * 三件事：
  *   1) 建索引：扫一遍基表，把所有行的 (列值 → RID) 灌进 B+ 树；
- *   2) 维护：插入新行时把新 RID 追加进该表上的所有索引（本系统没有 delete/update，
- *      insert 是唯一写路径，所以一处钩子就够）；
+ *   2) 维护：插入时追加新 RID，DELETE / UPDATE 后重建目标表索引；
  *   3) 查询：按"表 + 列"找到可用索引，交给 IndexScan 算子与规划器。
  *
  * 目录里的元数据由 {@link com.course.dbms.engine.table.Catalog} 负责，本类只管树。
@@ -65,6 +64,13 @@ public class IndexManager {
         List<Index> list = byTable.get(table.tableId());
         if (list == null) return;
         for (Index idx : list) idx.insert(row.get(idx.colIndex()), pageNo, slot);
+    }
+
+    /** 批量修改后只重建目标表的派生索引，移除旧键及旧 RID。 */
+    public void rebuild(Table table) {
+        List<Index> old = new ArrayList<>(indexesOf(table.tableId()));
+        byTable.remove(table.tableId());
+        for (Index idx : old) createIndex(idx.name(), table, idx.colIndex());
     }
 
     /** 某张表上的所有索引（无则空列表）。 */

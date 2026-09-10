@@ -6,6 +6,8 @@ import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
 import com.course.dbms.compiler.ast.CreateStmt;
 import com.course.dbms.compiler.ast.InsertStmt;
+import com.course.dbms.compiler.ast.DeleteStmt;
+import com.course.dbms.compiler.ast.UpdateStmt;
 import com.course.dbms.compiler.ast.SelectItem;
 import com.course.dbms.compiler.ast.SelectStmt;
 import com.course.dbms.compiler.ast.ShowStmt;
@@ -66,6 +68,16 @@ public class PlanBuilder {
         if (stmt instanceof CreateStmt) return buildCreate((CreateStmt) stmt);
         if (stmt instanceof CreateIndexStmt) return buildCreateIndex((CreateIndexStmt) stmt);
         if (stmt instanceof InsertStmt) return buildInsert((InsertStmt) stmt);
+        if (stmt instanceof DeleteStmt) {
+            DeleteStmt d = (DeleteStmt) stmt;
+            return new Plan(new com.course.dbms.engine.exec.op.Mutate(se, catalog.getTable(d.tableName),
+                    d.where, null, catalog.indexManager()), Collections.singletonList("affected"));
+        }
+        if (stmt instanceof UpdateStmt) {
+            UpdateStmt u = (UpdateStmt) stmt;
+            return new Plan(new com.course.dbms.engine.exec.op.Mutate(se, catalog.getTable(u.tableName),
+                    u.where, u.assignments, catalog.indexManager()), Collections.singletonList("affected"));
+        }
         if (stmt instanceof SelectStmt) return buildSelect((SelectStmt) stmt);
         if (stmt instanceof ShowStmt) return buildShow((ShowStmt) stmt);
         if (stmt instanceof TxnStmt) {

@@ -244,7 +244,7 @@ dbms> select id from users where age > 24 order by age;
 建索引后  Project ← Filter ← IndexScan(users)      -- 同一句 SQL，行结果完全相同
 ```
 
-- **持久化取舍**：索引是**派生数据**，只有元数据进系统目录表 `sys_indexes`，B+ 树本身在内存里，`Catalog.reload()` 时**重扫基表重建**。好处是与影子页事务/WAL 天然解耦：提交后重建即生效，回滚后重建即撤销（`Session` 的 `ROLLBACK` 本来就会调 `reload()`）。`Insert` 算子插入成功后顺手把新 RID 记进该表所有索引（系统没有 delete/update，`insert` 是唯一写路径，一处钩子即可）。
+- **持久化取舍**：索引是**派生数据**，只有元数据进系统目录表 `sys_indexes`，B+ 树本身在内存里，`Catalog.reload()` 时**重扫基表重建**。好处是与影子页事务/WAL 天然解耦：提交后重建即生效，回滚后重建即撤销（`Session` 的 `ROLLBACK` 本来就会调 `reload()`）。`Insert` 算子插入成功后顺手把新 RID 记进该表所有索引；`DELETE` / `UPDATE` 批量修改后重建目标表索引，移除旧键和旧 RID。
 - **并发**：建索引对目标表加 X 锁（要扫全表，必须挡住并发写），所以内存索引不会被别的会话边扫边改。
 
 相关用例见 § 十 `engine/index/BPlusTreeTest`（分裂/树高/重复键/范围/有序）与 `db/IndexTest`（建索引前后结果一致、重启重建、事务回滚撤销）。
@@ -319,3 +319,19 @@ dbms> commit;            -- 先写 WAL 再落页；此刻 kill 掉服务端，�
 - 事务侧可再往深处做：`SAVEPOINT`、多隔离级别（READ COMMITTED/REPEATABLE READ）、undo 日志与 checkpoint（WAL redo 已实现，见 § 九）、页级锁/意向锁。
 
 这些在 [三大模块详解.md](三大模块详解.md) 末尾均标注为扩展方向。
+
+
+### DELETE / UPDATE
+
+```sql
+DELETE FROM users WHERE age < 18;
+UPDATE users SET age = 25, name = '张三' WHERE id = 1;
+```
+
+两类语句返回 `affected` 行数，不带 `WHERE` 时作用于全表。条件复用 SELECT 的比较及 AND/OR 规则，支持表名限定列和列间比较。SET 支持多个列的字面量赋值，拒绝重复列、未知列和无法转换的类型；暂不支持算术表达式或列引用赋值。
+
+修改接入 Session 表级写锁、影子页事务和 WAL，支持 BEGIN / COMMIT / ROLLBACK。更新前检查所有目标行的长度，单行超过一页会报 `SE-0009: record too large for page`。变长行可迁移到新页；删除压缩页内记录区并保留其余行的槽位编号，空槽位可复用。页内空间可回收，文件不会自动缩小。
+
+索引沿用现有派生数据设计，每次 DELETE / UPDATE 后重建目标表索引（成本随表大小增长）；回滚和重启仍由目录重载恢复。自动提交沿用现有直接写页机制，若需要多页修改的崩溃原子性，请使用显式事务。
+
+回归测试：`mvn -Dtest=MutationTest test`；全量测试：`mvn test`（JDK 17 或更高版本）。

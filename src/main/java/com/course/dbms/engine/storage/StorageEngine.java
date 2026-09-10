@@ -98,16 +98,16 @@ public class StorageEngine {
     public int[] insert(Table table, Row row) {
         int tableId = table.tableId();
         byte[] rec = rowToBytes(table.schema(), row);
+        validateRecord(rec);
         int n = pm.pageCount(tableId);
         for (int pageNo = 0; pageNo < n; pageNo++) {
             Page page = pm.getPage(tableId, pageNo);
             if (page == null) continue;
-            if (page.freeSpace() >= rec.length + Page.SLOT_SIZE) {
-                int slot = page.addRecord(rec);
-                if (slot >= 0) {
-                    pm.persist(page);
-                    return new int[] { pageNo, slot };
-                }
+            // 页自身判断是否需要新槽位，复用空槽位无需额外 SLOT_SIZE。
+            int slot = page.addRecord(rec);
+            if (slot >= 0) {
+                pm.persist(page);
+                return new int[] { pageNo, slot };
             }
         }
         int newPageNo = pm.newPage(tableId);
@@ -115,6 +115,29 @@ public class StorageEngine {
         int slot = newPage.addRecord(rec);
         pm.persist(newPage);
         return new int[] { newPageNo, slot };
+    }
+
+    /** 单行不得超过一页，写入前检查以免出现无效 RID。 */
+    public void validateRecord(byte[] record) {
+        if (record.length > Page.SIZE - Page.HEADER_SIZE - Page.SLOT_SIZE)
+            throw new Error("SE-0009", "record too large for page");
+    }
+
+    public void delete(Table table, Located row) {
+        Page page = pm.getPage(table.tableId(), row.pageNo());
+        if (page != null && page.deleteRecord(row.slot())) pm.persist(page);
+    }
+
+    public void update(Table table, Located old, Row row) {
+        byte[] record = rowToBytes(table.schema(), row);
+        validateRecord(record);
+        Page page = pm.getPage(table.tableId(), old.pageNo());
+        if (page.replaceRecord(old.slot(), record)) pm.persist(page);
+        else {
+            // 先成功插入新记录再移除旧记录；调用方已固定本次更新的 RID 集合。
+            insert(table, row);
+            delete(table, old);
+        }
     }
 
     /** 全表扫描：逐页逐槽位读出所有行。 */

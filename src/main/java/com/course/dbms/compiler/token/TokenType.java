@@ -7,7 +7,7 @@ package com.course.dbms.compiler.token;
  */
 public enum TokenType {
     // 关键字
-    CREATE, TABLE, INSERT, INTO, VALUES, SELECT, FROM,
+    DELETE, UPDATE, SET, CREATE, TABLE, INSERT, INTO, VALUES, SELECT, FROM,
     WHERE, AND, OR, NOT, ORDER, BY, ASC, DESC, SHOW, TABLES,
     JOIN, ON, AS, INNER, LEFT, GROUP,    // 多表联查 / 聚合
     INDEX, INDEXES,            // 索引
