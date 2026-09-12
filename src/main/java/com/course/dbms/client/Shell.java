@@ -19,8 +19,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * 客户端交互 shell。
- * 交互模式：逐行读入，累积到"分号"才发送；支持 \\dt / \\d <t> / \\q。
- * 批处理：-e SQL 立即执行；-f 文件逐条执行。
+ * 交互模式：逐行读入，累积到"分号"才发送；支持 \dt / \d <t> / \trace / \q。
+ * 批处理：-e SQL 立即执行；-f 文件逐条执行；-t 让每条语句附带编译四阶段输出。
  * 用一个连接持续往返（真正体现客户端/服务器端交互）。
  */
 public class Shell {
@@ -29,12 +29,16 @@ public class Shell {
     private final DataOutputStream out;
     private final BufferedReader console;
     private final StringBuilder buf = new StringBuilder();
+    private boolean traceOn = false;
 
     public Shell(Socket socket) throws IOException {
         this.in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
         this.out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
         this.console = new BufferedReader(new InputStreamReader(System.in));
     }
+
+    /** 批处理开关：true 时之后发送的每条 SQL 都附带编译四阶段输出（trace 前缀）。 */
+    public void setTrace(boolean on) { this.traceOn = on; }
 
     /** 交互 REPL。 */
     public void run() throws IOException {
@@ -53,6 +57,11 @@ public class Shell {
                 }
                 if (t.equals("\\dt")) { send("show tables"); continue; }
                 if (t.startsWith("\\d ")) { send("show table " + t.substring(3).trim()); continue; }
+                if (t.equals("\\trace")) {
+                    traceOn = !traceOn;
+                    System.out.println("trace " + (traceOn ? "on" : "off"));
+                    continue;
+                }
                 if (t.startsWith("\\")) { System.out.println("unknown command: " + t); continue; }
             }
             buf.append(line).append('\n');
@@ -84,14 +93,23 @@ public class Shell {
         }
     }
 
-    /** 发送一条完整语句并渲染结果。 */
+    /** 发送一条完整语句并渲染结果；开 trace 时先回显编译四阶段输出再渲染结果。 */
     private void send(String sql) throws IOException {
+        if (traceOn) sql = "trace " + sql;
         Packager.write(out, new Package(false, sql.getBytes(StandardCharsets.UTF_8)));
-        Package pkg = Packager.read(in);
-        if (pkg.error) {
-            System.out.println(new String(pkg.payload, StandardCharsets.UTF_8));
-        } else {
-            Renderer.render(Decoder.decodeResult(pkg.payload));
+        while (true) {
+            Package pkg = Packager.read(in);
+            if (pkg.trace) {
+                // 编译四阶段中间输出：Token流 -> AST -> 语义 -> 计划
+                System.out.println(new String(pkg.payload, StandardCharsets.UTF_8));
+                continue;
+            }
+            if (pkg.error) {
+                System.out.println(new String(pkg.payload, StandardCharsets.UTF_8));
+            } else {
+                Renderer.render(Decoder.decodeResult(pkg.payload));
+            }
+            break;
         }
     }
 
@@ -128,6 +146,6 @@ public class Shell {
     }
 
     private String banner() {
-        return "DBMS client -- type SQL, end with ';'.  \\dt  \\d <table>  \\q";
+        return "DBMS client -- type SQL, end with ';'.  \\dt  \\d <table>  \\trace  \\q";
     }
 }

@@ -25,8 +25,11 @@ import java.util.List;
 
 /**
  * 递归下降语法分析器：把 token 流构建成语法树。
- * 支持四类语句：create table / insert / select / show。
+ * 支持四类语句：create table / insert / select / show（另有 delete / update / 事务控制）。
  * 对应图片"① SQL编译器 - 语法分析：构建语法树，支持四类语句"。
+ *
+ * 语法错误诊断（课程验收要点）：错误信息 = unexpected token + 期望符号集合 + 行号列号，例如
+ *   unexpected token: ';', expected: IDENTIFIER at line 1, column 38
  *
  * 文法（附录在 三大模块详解.md）：
  *   stmt     := create | insert | select | show
@@ -50,8 +53,14 @@ public class Parser {
     private final List<Token> tokens;
     private int pos = 0;
 
+    /** 从 SQL 文本解析：内部先做一次词法分析。 */
     public Parser(String sql) {
-        this.tokens = new Lexer(sql).tokenize();
+        this(new Lexer(sql).tokenize());
+    }
+
+    /** 从已有 Token 流解析（Tracer 复用词法结果，避免重复切词）。 */
+    public Parser(List<Token> tokens) {
+        this.tokens = tokens;
     }
 
     public Stmt parse() {
@@ -73,14 +82,15 @@ public class Parser {
             case BEGIN:    return parseTx(TxOp.BEGIN);
             case COMMIT:   return parseTx(TxOp.COMMIT);
             case ROLLBACK: return parseTx(TxOp.ROLLBACK);
-            default: throw err(peek(), "expected statement, got " + peek().text);
+            default: throw err(peek(), "unexpected token: '" + peek().text
+                    + "', expected statement: CREATE | INSERT | SELECT | DELETE | UPDATE | SHOW | BEGIN | COMMIT | ROLLBACK");
         }
     }
 
     /** 事务控制语句（由 Session 拦截处理，这里只做语法识别）。 */
     private Stmt parseTx(TxOp op) {
         TokenType kw = op == TxOp.BEGIN ? TokenType.BEGIN
-                     : op == TxOp.COMMIT ? TokenType.COMMIT : TokenType.ROLLBACK;
+                : op == TxOp.COMMIT ? TokenType.COMMIT : TokenType.ROLLBACK;
         expect(kw);
         // 可选词：BEGIN [TRANSACTION|WORK]、COMMIT [WORK]、ROLLBACK [WORK]
         if (peek().type == TokenType.IDENTIFIER) {
@@ -312,15 +322,10 @@ public class Parser {
         return Cond.cmp(lhs.qualifier, lhs.name, op, val);
     }
 
+    /** 字面量：数字 / 字符串 / TRUE / FALSE。报错时给出完整期望集合。 */
     private Object expectLiteral() {
-        Token t = next();
-        switch (t.type) {
-            case NUMBER:  return t.value;
-            case STR_LIT: return t.value;
-            case TRUE:    return Boolean.TRUE;
-            case FALSE:   return Boolean.FALSE;
-            default: throw err(t, "expected literal, got " + t.text);
-        }
+        Token t = expectAny(TokenType.NUMBER, TokenType.STR_LIT, TokenType.TRUE, TokenType.FALSE);
+        return t.value;
     }
 
     // ---- 工具 ----
@@ -332,7 +337,7 @@ public class Parser {
         return false;
     }
     private Token expect(TokenType tt) {
-        if (peek().type != tt) throw err(peek(), "expected " + tt + " but got " + peek().text);
+        if (peek().type != tt) throw err(peek(), "expected " + describe(tt) + " but got '" + peek().text + "'");
         return next();
     }
     private String expectIdent() {
@@ -340,7 +345,37 @@ public class Parser {
         return (String) t.value;
     }
 
+    /** 多选一匹配：不匹配时报 "unexpected token: 'x', expected: A | B | C"。 */
+    private Token expectAny(TokenType... tts) {
+        for (TokenType tt : tts) {
+            if (peek().type == tt) return next();
+        }
+        StringBuilder exp = new StringBuilder();
+        for (int k = 0; k < tts.length; k++) {
+            if (k > 0) exp.append(" | ");
+            exp.append(describe(tts[k]));
+        }
+        throw err(peek(), "unexpected token: '" + peek().text + "', expected: " + exp);
+    }
+
+    /** TokenType 的展示名：标点用符号本身，其余用枚举名（课程错误诊断格式）。 */
+    private static String describe(TokenType t) {
+        switch (t) {
+            case LPAREN:   return "'('";
+            case RPAREN:   return "')'";
+            case COMMA:    return "','";
+            case SEMICOLON: return "';'";
+            case STAR:     return "'*'";
+            case DOT:      return "'.'";
+            case OPERATOR: return "OPERATOR(= <> < > <= >=)";
+            default:       return t.name();
+        }
+    }
+
+    /** 语法错误：错误类型 + 原因 + unexpected/expected + 行号列号定位。 */
     private Error err(Token t, String msg) {
-        return new Error("SY-0001", msg + " at " + t.pos);
+        String at = t.line > 0 ? (" at line " + t.line + ", column " + t.column)
+                : (" at " + t.pos);
+        return new Error("SY-0001", msg + at);
     }
 }

@@ -2,10 +2,12 @@ package com.course.dbms.db;
 
 import com.course.dbms.common.Consts;
 import com.course.dbms.compiler.Analyzer;
+import com.course.dbms.compiler.Lexer;
 import com.course.dbms.compiler.Plan;
 import com.course.dbms.compiler.PlanBuilder;
 import com.course.dbms.compiler.Parser;
 import com.course.dbms.compiler.ast.Stmt;
+import com.course.dbms.compiler.token.Token;
 import com.course.dbms.engine.Result;
 import com.course.dbms.engine.exec.Executor;
 import com.course.dbms.engine.storage.StorageEngine;
@@ -15,6 +17,8 @@ import com.course.dbms.storage.DiskManager;
 import com.course.dbms.storage.LruCache;
 import com.course.dbms.storage.PageManager;
 import com.course.dbms.txn.LockManager; // 共享锁管理器：多连接靠它协调
+
+import java.util.List;
 
 /**
  * 数据库门面：对外开放的唯一入口。
@@ -52,6 +56,22 @@ public class Database {
     /** 只做词法+语法解析，返回 AST。由 Session 先拿到语句类型以决定是否走事务/加锁。 */
     public Stmt parse(String sql) {
         return new Parser(sql).parse();
+    }
+
+    /** 只做词法分析，返回 Token 流（供 Tracer 展示四元式与错误定位测试）。 */
+    public List<Token> tokenize(String sql) {
+        return new Lexer(sql).tokenize();
+    }
+
+    /** 只做语义检查（供 Tracer 单独展示语义阶段）。 */
+    public void analyze(Stmt stmt) {
+        analyzer.analyze(stmt);
+    }
+
+    /** 语义检查 + 执行计划生成，返回逻辑执行计划但不执行（供 Tracer 展示计划阶段）。 */
+    public Plan plan(Stmt stmt) {
+        analyzer.analyze(stmt);
+        return planner.build(stmt);
     }
 
     /** 执行一条【可执行语句】。是否走事务影子路径由 {@link com.course.dbms.txn.Txn#current()} 决定。 */

@@ -7,15 +7,15 @@ import com.course.dbms.compiler.token.TokenType;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * 词法分析器：把 SQL 文本切成 token 流。
- * 识别：关键字、标识符、数字常量（整型/浮点）、字符串常量、比较运算符、括号逗号分号。
- * 对应图片"① SQL编译器 - 词法分析：识别关键字、标识符、常量、运算符"。
- */
+
 public class Lexer {
 
     private final String sql;
     private int i = 0;
+
+    // 行列游标：只前进不后退，多次调用总计 O(n)
+    private int line = 1;
+    private int lineStart = 0;   // 当前行首字符在 sql 中的 offset
 
     public Lexer(String sql) {
         this.sql = sql;
@@ -32,8 +32,11 @@ public class Lexer {
     }
 
     private Token next() {
-        skipWhitespace();
-        if (i >= sql.length()) return tok(TokenType.EOF, "", null, i);
+        skipWhitespaceAndComments();
+        if (i >= sql.length()) {
+            int[] lc = lineCol(i);
+            return new Token(TokenType.EOF, "", null, i, lc[0], lc[1]);
+        }
 
         char c = sql.charAt(i);
         int start = i;
@@ -107,15 +110,41 @@ public class Lexer {
         return null;
     }
 
-    private void skipWhitespace() {
-        while (i < sql.length() && Character.isWhitespace(sql.charAt(i))) i++;
+    private void skipWhitespaceAndComments() {
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (Character.isWhitespace(c)) { i++; continue; }
+            if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
+                while (i < sql.length() && sql.charAt(i) != '\n') i++;
+                continue;
+            }
+            if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                if (end < 0) throw err(i, "unterminated block comment");
+                i = end + 2;
+                continue;
+            }
+            break;
+        }
+    }
+
+    /** offset -> [1-based 行号, 1-based 列号]。游标只前进，多次调用总计 O(n)。 */
+    private int[] lineCol(int offset) {
+        while (lineStart < offset) {
+            if (sql.charAt(lineStart) == '\n') line++;
+            lineStart++;
+        }
+        return new int[] { line, offset - lineStart + 1 };
     }
 
     private Token tok(TokenType type, String text, Object value, int pos) {
-        return new Token(type, text, value, pos);
+        int[] lc = lineCol(pos);
+        return new Token(type, text, value, pos, lc[0], lc[1]);
     }
 
+    /** 词法错误：错误类型 + 原因 + 行号列号定位（指导书要求）。 */
     private Error err(int pos, String msg) {
-        return new Error("LX-0001", msg + " at " + pos);
+        int[] lc = lineCol(pos);
+        return new Error("LX-0001", msg + " at line " + lc[0] + ", column " + lc[1]);
     }
 }
