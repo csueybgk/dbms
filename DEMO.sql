@@ -20,3 +20,14 @@ select id, name from users where age > 22 order by id;
 select id, name from users where age = 30;
 insert into users values (4, 'dave', 30, 99.0);
 select id, name from users where age = 30 order by id;
+
+-- 完整性约束：NOT NULL / DEFAULT / PRIMARY KEY / UNIQUE / CHECK
+create table staff (id int32 primary key, name string not null, dept string default 'eng', email string unique, bonus int32 check (bonus <= 1000));
+insert into staff (id, name) values (1, 'alice');
+insert into staff (id, name, bonus) values (2, 'bob', null);
+insert into staff (id, name, bonus) values (3, 'carol', 300);
+show table staff;
+select * from staff order by id;
+-- 下面两条应分别被 NOT NULL 与 PRIMARY KEY 拒绝（错误码 SE-0010 / SE-0011）
+insert into staff (id) values (4);
+insert into staff (id, name) values (1, 'dup');

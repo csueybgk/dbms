@@ -18,6 +18,8 @@ import com.course.dbms.engine.storage.StorageEngine;
 import com.course.dbms.engine.table.Catalog;
 import com.course.dbms.engine.table.Column;
 import com.course.dbms.engine.table.CombinedSchema;
+import com.course.dbms.engine.table.Constraint;
+import com.course.dbms.engine.table.ConstraintChecker;
 import com.course.dbms.engine.table.Schema;
 import com.course.dbms.engine.table.Table;
 
@@ -31,9 +33,16 @@ import java.util.Set;
  * 对应图片"① SQL编译器 - 语义分析：存在性 / 类型 / 列数检查"。
  *
  * 检查项（错误码以 SE- 开头）：
- *   - CREATE：列名不可重复、至少一列；表名唯一由 Catalog 在落地时校验。
+ *   - CREATE：列名不可重复、至少一列；约束名不重复（SE-0015）、至多一个 PRIMARY KEY（SE-0016）、
+ *             约束引用的列存在（SE-0004）、DEFAULT 与列类型相容（SE-0005）、
+ *             CHECK 的列存在且字面量可 cast；表名唯一由 Catalog 在落地时校验。
  *   - CREATE INDEX：表存在、列存在（SE-0004）、索引名未被占用（SE-0007）。
- *   - INSERT：表存在（TB-0001）；值的个数必须等于列数；每个值可被 cast 到对应列类型（SE-0005）。
+ *   - INSERT：表存在（TB-0001）；列清单里的列存在（SE-0013）/不重复（SE-0014）；
+ *             值的个数与列数（或列清单）一致（SE-0003）；每个值可被 cast 到对应列类型（SE-0005）。
+ *
+ * 【边界】这里只做"看 AST 就能判定"的静态检查。NOT NULL / UNIQUE / CHECK 是否真的成立
+ * 依赖表中的实际数据，由权威写入点 {@link com.course.dbms.engine.table.ConstraintChecker}
+ * 在 Insert / Mutate 算子写盘前判定 —— 预检是为了快速失败和友好报错，不是为了正确性。
  *   - SELECT：表存在；SELECT 列、WHERE 列、ORDER BY 列都必须存在于表结构中。
  *   - SHOW：show table <x> 时该表必须存在。
  *
@@ -74,6 +83,60 @@ public class Analyzer {
                 throw new Error("SE-0002", "列名重复: " + col.name());
             }
         }
+        // 表还没落地，先按列定义拼一个临时 Schema 来校验约束
+        Schema schema = new Schema();
+        for (Column col : c.columns) schema.add(col.name(), col.type());
+        checkConstraints(schema, c.tableName, c.constraints);
+    }
+
+    /** CREATE TABLE 约束的静态检查（不碰数据）。 */
+    private void checkConstraints(Schema schema, String tableName, List<Constraint> cons) {
+        Set<String> names = new HashSet<>();
+        boolean hasPrimaryKey = false;
+        for (Constraint con : cons) {
+            if (!con.name().isEmpty() && !names.add(con.name().toLowerCase())) {
+                throw new Error("SE-0015", "约束名重复: " + con.name());
+            }
+            if (con.kind() == Constraint.Kind.PRIMARY_KEY) {
+                if (hasPrimaryKey) throw new Error("SE-0016", "一张表只能有一个 PRIMARY KEY");
+                hasPrimaryKey = true;
+            }
+            for (String col : con.columns()) {
+                if (schema.indexOf(col) < 0) {
+                    throw new Error("SE-0004", "约束引用的列不存在: " + col + "（表 " + tableName + "）");
+                }
+            }
+            switch (con.kind()) {
+                case DEFAULT: {
+                    String col = con.columns().get(0);
+                    // parseLiteral 而不是 cast：cast 会把 1.5 静默截断成 1，1.5 这种默认值必须报错
+                    Object v = schema.column(schema.indexOf(col)).type().parseLiteral(con.detail());
+                    if (v == null && notNullColumns(schema, cons).contains(col.toLowerCase())) {
+                        throw new Error("SE-0005", "列 " + col + " 是 NOT NULL，默认值不能为 NULL");
+                    }
+                    break;
+                }
+                case CHECK: {
+                    CombinedSchema cs = new CombinedSchema();
+                    for (Column col : schema.columns()) cs.add(tableName, col.name(), col.type());
+                    // 顺带验证 Cond → toSql → 重新解析这条往返链没走样（cond() 就是重新解析）
+                    checkCondRich(cs, con.cond());
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    }
+
+    /** 该表所有 NOT NULL 列（含 PRIMARY KEY 隐含的 NOT NULL），小写列名。 */
+    private static Set<String> notNullColumns(Schema schema, List<Constraint> cons) {
+        Set<String> out = new HashSet<>();
+        for (Constraint con : cons) {
+            if (con.kind() != Constraint.Kind.NOT_NULL && con.kind() != Constraint.Kind.PRIMARY_KEY) continue;
+            for (String col : con.columns()) out.add(col.toLowerCase());
+        }
+        return out;
     }
 
     /**
@@ -92,13 +155,9 @@ public class Analyzer {
 
     private void analyzeInsert(InsertStmt ins) {
         Table table = catalog.getTable(ins.tableName);       // TB-0001 if missing
-        Schema schema = table.schema();
-        if (ins.values.size() != schema.columnCount()) {
-            throw new Error("SE-0003", "值个数与列数不一致: 列 " + schema.columnCount() + " 个, 给了 " + ins.values.size() + " 个");
-        }
-        for (int i = 0; i < schema.columnCount(); i++) {
-            StorageEngine.cast(schema, i, ins.values.get(i)); // SE-0005 on type mismatch
-        }
+        // 与 PlanBuilder 共用同一套解析：列清单解析、DEFAULT/NULL 补全、逐个 cast。
+        // 这样"预检报的错"和"落地会报的错"不会对不上。
+        ConstraintChecker.resolveInsert(table.schema(), ins.columns, ins.values);
     }
 
     private void analyzeMutation(String name, Cond where, java.util.Map<String, Object> assignments) {

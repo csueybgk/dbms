@@ -16,6 +16,10 @@ import java.nio.charset.StandardCharsets;
  *   [int 列数] { [int 长度][utf8 列名] }*列数
  *   [int 行数] { [int 长度][utf8 值文本] }*（行数*列数）
  * 值取 String.valueOf，布尔/数值/字符串统一转文本传输，客户端只负责展示。
+ *
+ * 唯一的例外是 NULL：长度写 -1，不写任何字节（与记录的磁盘格式同一个约定）。
+ * 不能走 String.valueOf —— 那会把空值变成四个字符的文本 "null"，客户端既没法把它
+ * 和字符串 'null' 区分开，也没法按空值渲染。
  */
 public final class Encoder {
 
@@ -29,7 +33,7 @@ public final class Encoder {
         out.writeInt(r.rows.size());
         for (Row row : r.rows) {
             for (int i = 0; i < r.columns.size(); i++) {
-                writeString(out, String.valueOf(row.get(i)));
+                writeValue(out, row.get(i));
             }
         }
         out.flush();
@@ -44,5 +48,14 @@ public final class Encoder {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);
         out.writeInt(b.length);
         out.write(b);
+    }
+
+    /** 单元格：NULL 写 -1 长度前缀（空串仍是 0，两者不同），其余转文本。 */
+    private static void writeValue(DataOutputStream out, Object v) throws IOException {
+        if (v == null) {
+            out.writeInt(-1);
+            return;
+        }
+        writeString(out, String.valueOf(v));
     }
 }

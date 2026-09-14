@@ -175,4 +175,57 @@ public class AnalyzerTest {
         Error e = bad("show indexes on ghost");
         assertTrue(e.code().startsWith("TB"));
     }
+
+    // ---- CREATE TABLE 约束的静态检查 ----
+    // 这里只管"看 AST / 看列定义就能判定"的部分；UNIQUE / CHECK 是否成立依赖实际数据，
+    // 由写入点的 ConstraintChecker 判定（见 db/ConstraintTest）。
+
+    @Test public void validCreateWithConstraints() {
+        ok("create table t1 (id int32 primary key, name string not null, age int32 default 18)");
+        ok("create table t2 (a int32, b int32, primary key (a, b))");
+        ok("create table t3 (a int32, b int32, check (a <= b))");
+        ok("create table t4 (a int32 unique, b string default 'x')");
+        ok("create table t5 (a int32 constraint ck check (a > 0))");
+    }
+
+    @Test public void createConstraintOnUnknownColumn() {
+        assertEquals("SE-0004", bad("create table t1 (a int32, unique (nosuch))").code());
+        assertEquals("SE-0004", bad("create table t2 (a int32, primary key (a, nosuch))").code());
+        assertEquals("SE-0004", bad("create table t3 (a int32, check (nosuch > 0))").code());
+    }
+
+    @Test public void createDuplicateConstraintName() {
+        assertEquals("SE-0015", bad("create table t1 (a int32 constraint c1 unique, b int32 constraint c1 unique)").code());
+    }
+
+    @Test public void createMultiplePrimaryKeys() {
+        assertEquals("SE-0016", bad("create table t1 (a int32 primary key, b int32 primary key)").code());
+        assertEquals("SE-0016", bad("create table t2 (a int32 primary key, b int32, primary key (b))").code());
+    }
+
+    /** DEFAULT 必须与列类型相容；`1.5` 给 int32 不能被静默截断成 1。 */
+    @Test public void createDefaultTypeMismatch() {
+        assertEquals("SE-0005", bad("create table t1 (a int32 default 1.5)").code());
+        assertEquals("SE-0005", bad("create table t2 (a int32 default 'abc')").code());
+        assertEquals("SE-0005", bad("create table t3 (a bool default 3)").code());
+    }
+
+    @Test public void createDefaultNullOnNotNullColumn() {
+        assertEquals("SE-0005", bad("create table t1 (a int32 not null default null)").code());
+    }
+
+    /** INSERT 列清单：列不存在 / 重复，以及列清单与值的个数不符。 */
+    @Test public void insertColumnListChecks() {
+        assertEquals("SE-0013", bad("insert into users (nosuch) values (1)").code());
+        assertEquals("SE-0014", bad("insert into users (id, id) values (1, 2)").code());
+        assertEquals("SE-0003", bad("insert into users (id, name) values (1)").code());
+        ok("insert into users (id, name) values (1, 'alice')");        // 其余列补 NULL
+        ok("insert into users values (1, 'alice', 23, 90.0)");         // 不给清单仍须按位齐全
+    }
+
+    /** 不带列清单时，值的个数仍须严格等于列数（既有断言依赖 SE-0003）。 */
+    @Test public void insertWithoutColumnListStillNeedsExactCount() {
+        assertEquals("SE-0003", bad("insert into users values (1, 'alice', 23)").code());
+        assertEquals("SE-0003", bad("insert into users values (1, 'alice', 23, 90.0, 5)").code());
+    }
 }

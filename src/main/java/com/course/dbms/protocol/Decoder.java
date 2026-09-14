@@ -24,7 +24,7 @@ public final class Decoder {
         List<Row> rows = new ArrayList<>();
         for (int i = 0; i < nr; i++) {
             List<Object> vals = new ArrayList<>();
-            for (int j = 0; j < nc; j++) vals.add(readString(in));
+            for (int j = 0; j < nc; j++) vals.add(readValue(in));
             rows.add(new Row(vals));
         }
         return new Result(cols, rows);
@@ -32,6 +32,19 @@ public final class Decoder {
 
     private static String readString(DataInputStream in) throws IOException {
         int len = in.readInt();
+        byte[] b = new byte[len];
+        in.readFully(b);
+        return new String(b, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 单元格：长度 -1 表示 NULL（与 {@link Encoder#writeValue} 对应）。
+     * 不能走 readString —— new byte[-1] 会抛 NegativeArraySizeException，
+     * 那是 RuntimeException，会越过 {@code catch (IOException)} 掐断连接。
+     */
+    private static Object readValue(DataInputStream in) throws IOException {
+        int len = in.readInt();
+        if (len < 0) return null;
         byte[] b = new byte[len];
         in.readFully(b);
         return new String(b, StandardCharsets.UTF_8);

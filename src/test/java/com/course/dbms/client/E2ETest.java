@@ -60,5 +60,13 @@ public class E2ETest {
         // 索引：CREATE INDEX / SHOW INDEXES 走通；建索引后插入的 dave 也能被 where age=30 查到
         assertTrue("show indexes 应列出 idx_age", out.contains("idx_age"));
         assertTrue("索引扫描应查到建索引后插入的 dave", out.contains("dave"));
+
+        // 完整性约束：新语法要能穿过真实 Socket 往返 ——
+        // show table 的第三列（约束）经协议编码后仍要看得见
+        assertTrue("show table 应列出主键约束", out.contains("primary key"));
+        assertTrue("show table 应回显 CHECK 表达式原文", out.contains("check (bonus <= 1000)"));
+        // 两条非法插入必须被拒绝，且错误经错误包渲染回客户端
+        assertTrue("缺列插入应被 NOT NULL 拒绝", out.contains("SE-0010"));
+        assertTrue("重复主键应被 PRIMARY KEY 拒绝", out.contains("SE-0011"));
     }
 }

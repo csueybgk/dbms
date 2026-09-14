@@ -12,9 +12,9 @@ import com.course.dbms.common.Error;
  *   apply   —— 谓词判定（WHERE / ON）用。SQL 三值逻辑下与 NULL 的任何比较都是
  *              UNKNOWN，而 WHERE 只保留 TRUE，故一律返回 false。
  *
- * 注：本项目 SQL 无法表达 NULL 字面量（无 NULL 关键字，expectLiteral 只收
- * NUMBER/STR_LIT/TRUE/FALSE），表的列值永不为 NULL；NULL 只出现在 Join 为
- * LEFT JOIN 未匹配行合成的右列上，故索引键实际上不会为 NULL。
+ * 注：表的列值可以为 NULL（SQL 有 NULL 字面量，磁盘用 len=-1 标记）。NULL 来自
+ * 显式插入、DEFAULT NULL，或未被 DEFAULT 覆盖的缺省列；Join 为 LEFT JOIN 未匹配
+ * 行合成的右列同样是 NULL。索引键不含 NULL —— IndexManager 建树/追加时会跳过。
  */
 public final class Compare {
 

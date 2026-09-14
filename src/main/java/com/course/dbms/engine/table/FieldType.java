@@ -59,6 +59,50 @@ public enum FieldType {
         }
     }
 
+    /**
+     * 把 DEFAULT 约束里保存的字面量【原文】还原成本类型的 Java 值。
+     * 存原文而不是存 "String.valueOf(值)" 是有意的：这样 STRING 列的默认值
+     * 'null'（四个字符）与 DEFAULT NULL 不会混淆，且与 SQL 里写的形态一致。
+     *
+     * 原文形态：{@code 'abc'} 字符串字面量（带引号）、{@code 123} 数值、
+     * {@code true}/{@code false} 布尔、{@code NULL} 空值。
+     * 与列类型不匹配（如给 int32 写 1.5）抛 SE-0005 —— 注意不能只靠
+     * {@link #encode} 或 StorageEngine.cast 兜底：cast 会把 1.5 静默截断成 1。
+     */
+    public Object parseLiteral(String text) {
+        if (text == null || text.equalsIgnoreCase("null")) return null;
+        String t = text.trim();
+        // 字符串字面量：词法器产出的 STR_LIT 原文一定带引号（且不支持转义，内部不可能有 '）
+        if (t.length() >= 2 && t.charAt(0) == '\'' && t.charAt(t.length() - 1) == '\'') {
+            if (this != STRING) throw mismatch(text);
+            return t.substring(1, t.length() - 1);
+        }
+        try {
+            switch (this) {
+                case INT32: {
+                    long n = Long.parseLong(t);
+                    if (n < Integer.MIN_VALUE || n > Integer.MAX_VALUE) throw mismatch(text);
+                    return (int) n;
+                }
+                case INT64:
+                case DATETIME: return Long.parseLong(t);
+                case FLOAT64:  return Double.parseDouble(t);
+                case BOOL:
+                    if (t.equalsIgnoreCase("true")) return Boolean.TRUE;
+                    if (t.equalsIgnoreCase("false")) return Boolean.FALSE;
+                    throw mismatch(text);
+                case STRING: return t;               // 宽容：未加引号的文本也当字符串
+                default: throw Error.st("unknown type parseLiteral: " + this);
+            }
+        } catch (NumberFormatException e) {
+            throw mismatch(text);
+        }
+    }
+
+    private Error mismatch(String text) {
+        return new Error("SE-0005", "默认值 " + text + " 与列类型 " + sqlName() + " 不匹配");
+    }
+
     public static FieldType fromName(String name) {
         for (FieldType t : values()) {
             if (t.name().equalsIgnoreCase(name)) return t;

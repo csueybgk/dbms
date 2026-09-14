@@ -43,7 +43,9 @@ public class IndexManager {
         Column col = table.schema().column(colIndex);
         Index idx = new Index(name, table.name(), table.tableId(), col.name(), colIndex, col.type());
         for (StorageEngine.Located loc : se.scanLocated(table)) {          // 全表扫描建树
-            idx.insert(loc.row().get(colIndex), loc.pageNo(), loc.slot());
+            Object key = loc.row().get(colIndex);
+            if (key == null) continue;          // NULL 不进索引：B+ 树按 Compare.compare 定位，
+            idx.insert(key, loc.pageNo(), loc.slot());   // 而 null 被当成"最大"，会让 search 结果错乱
         }
         register(idx);
         return idx;
@@ -63,7 +65,11 @@ public class IndexManager {
     public void onInsert(Table table, Row row, int pageNo, int slot) {
         List<Index> list = byTable.get(table.tableId());
         if (list == null) return;
-        for (Index idx : list) idx.insert(row.get(idx.colIndex()), pageNo, slot);
+        for (Index idx : list) {
+            Object key = row.get(idx.colIndex());
+            if (key == null) continue;          // 同 createIndex：NULL 不入索引
+            idx.insert(key, pageNo, slot);
+        }
     }
 
     /** 批量修改后只重建目标表的派生索引，移除旧键及旧 RID。 */

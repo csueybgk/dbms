@@ -11,6 +11,9 @@ public enum TokenType {
     WHERE, AND, OR, NOT, ORDER, BY, ASC, DESC, SHOW, TABLES,
     JOIN, ON, AS, INNER, LEFT, GROUP,    // 多表联查 / 聚合
     INDEX, INDEXES,            // 索引
+    // 列约束 / 表约束。注意：保留字不能再用作列名或表名（本项目无转义标识符机制）
+    NULL, DEFAULT, PRIMARY, KEY, UNIQUE, CHECK, CONSTRAINT,
+    FOREIGN, REFERENCES,       // 不支持外键，但单独成词以便给出定向报错
     TRUE, FALSE,
     BEGIN, COMMIT, ROLLBACK,   // 事务控制
 

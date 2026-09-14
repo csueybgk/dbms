@@ -36,6 +36,29 @@ public class ProtocolTest {
         assertEquals(0, back.rows.size());
     }
 
+    /**
+     * 单元格里的 NULL 必须原样过线：走 String.valueOf 会把空值变成文本 "null"，
+     * 客户端于是既不能按空值渲染，也分不清它和字符串 'null'。
+     */
+    @Test public void nullValueRoundTrip() throws Exception {
+        List<String> cols = Arrays.asList("id", "v", "s");
+        List<Row> rows = Arrays.asList(Row.of(1, null, "null"));
+        Result back = Decoder.decodeResult(Encoder.encodeResult(new Result(cols, rows)));
+
+        assertEquals(1, back.rows.size());
+        assertEquals("1", back.rows.get(0).get(0));
+        assertNull(back.rows.get(0).get(1));                   // 真 NULL 读回来还是 null
+        assertEquals("null", back.rows.get(0).get(2));         // 字符串 'null' 仍是四个字符
+    }
+
+    /** 空串（长度 0）不能被当成 NULL（长度 -1）。 */
+    @Test public void emptyStringIsNotNullOnTheWire() throws Exception {
+        Result r = new Result(Arrays.asList("s"), Arrays.asList(Row.of("")));
+        Object back = Decoder.decodeResult(Encoder.encodeResult(r)).rows.get(0).get(0);
+        assertNotNull(back);
+        assertEquals("", back);
+    }
+
     @Test public void packagerFrameRoundTrip() throws Exception {
         byte[] body = "select * from t".getBytes("UTF-8");
         ByteArrayOutputStream bos = new ByteArrayOutputStream();

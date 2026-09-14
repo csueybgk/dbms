@@ -102,4 +102,55 @@ public class TracerTest {
         assertEquals(TokenType.SELECT, ts.get(0).type);
         assertEquals(2, ts.get(0).line);   // select 在第二行
     }
+
+    // ---- 约束语法与 NULL 字面量的 trace ----
+
+    /** 第②阶段靠反射判断 AST 是否自定义了 toString：不写就只打印节点名，约束在 trace 里会全隐身。 */
+    @Test
+    public void traceShowsConstraintsInAst() {
+        String out = Tracer.trace(db, "create table t (id int32 primary key, name string not null, "
+                + "age int32 default 18, score int32 check (score >= 0))");
+        assertTrue(out.contains("--② 语法分析"));
+        assertTrue(out, out.contains("create table t"));
+        assertTrue(out, out.contains("primary key"));
+        assertTrue(out, out.contains("not null"));
+        assertTrue(out, out.contains("default 18"));
+        assertTrue(out, out.contains("check (score >= 0)"));
+    }
+
+    /** 多列约束不能被"贴在列上"的规则吞掉：表级 PK/UNIQUE 要单独出现。 */
+    @Test
+    public void traceShowsTableLevelConstraint() {
+        String out = Tracer.trace(db, "create table p (a int32, b int32, primary key (a, b))");
+        assertTrue(out, out.contains("primary key (a, b)"));
+    }
+
+    /** NULL 是新字面量：词法/语法/计划三阶段都要能过。 */
+    @Test
+    public void traceAcceptsNullLiteral() {
+        db.execute("create table t (a int32, b string)");
+        String out = Tracer.trace(db, "insert into t values (1, null)");
+        assertTrue(out.contains("--① 词法分析"));
+        assertTrue(out, out.contains("NULL"));          // token 流里看得见 NULL
+        assertTrue(out.contains("--③ 语义分析: OK"));
+        assertTrue(out, out.contains("Insert(t)"));
+    }
+
+    /** SHOW TABLE 的结果集多了第三列（约束），trace 到第④阶段仍要能编译。 */
+    @Test
+    public void traceShowTableWithConstraints() {
+        db.execute("create table t (id int32 primary key)");
+        String out = Tracer.trace(db, "show table t");
+        assertTrue(out.contains("--④ 逻辑执行计划"));
+        assertTrue(out, out.contains("ShowTable(t)"));
+    }
+
+    /** INSERT 的可选列清单也要进 token 流与语法树。 */
+    @Test
+    public void traceAcceptsInsertColumnList() {
+        db.execute("create table t (a int32, b string default 'x')");
+        String out = Tracer.trace(db, "insert into t (a) values (1)");
+        assertTrue(out.contains("--③ 语义分析: OK"));
+        assertTrue(out, out.contains("Insert(t)"));
+    }
 }

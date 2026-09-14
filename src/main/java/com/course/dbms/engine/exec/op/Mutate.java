@@ -3,7 +3,11 @@ package com.course.dbms.engine.exec.op;
 import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.engine.index.IndexManager;
 import com.course.dbms.engine.storage.StorageEngine;
-import com.course.dbms.engine.table.*;
+import com.course.dbms.engine.table.CombinedSchema;
+import com.course.dbms.engine.table.Column;
+import com.course.dbms.engine.table.ConstraintChecker;
+import com.course.dbms.engine.table.Row;
+import com.course.dbms.engine.table.Table;
 import java.util.*;
 
 /** DELETE / UPDATE 共用目标行扫描；赋值为 null 表示删除。 */
@@ -13,6 +17,8 @@ public class Mutate extends Operator {
     private final Cond where;
     private final Map<String, Object> assignments;
     private final IndexManager indexes;
+    /** 一个语句一个实例：内部的"本次已接受键"集合不能跨语句残留。 */
+    private final ConstraintChecker checker = new ConstraintChecker();
 
     public Mutate(StorageEngine storage, Table table, Cond where,
                   Map<String, Object> assignments, IndexManager indexes) {
@@ -27,10 +33,12 @@ public class Mutate extends Operator {
     @Override public List<Row> execute() {
         CombinedSchema schema = new CombinedSchema();
         for (Column column : table.schema().columns()) schema.add(table.name(), column.name(), column.type());
+        List<StorageEngine.Located> snapshot = storage.scanLocated(table);
         List<StorageEngine.Located> targets = new ArrayList<>();
         List<Row> replacements = new ArrayList<>();
-        // 先求值、检查所有新行，再执行写入，类型或长度错误不会留下部分修改。
-        for (StorageEngine.Located located : storage.scanLocated(table)) {
+        // 先求值、检查所有新行，再执行写入，类型/长度/约束错误不会留下部分修改。
+        // 约束检查拿【语句开始前】的快照判重，并跳过被替换的那一行自己。
+        for (StorageEngine.Located located : snapshot) {
             if (where != null && !CondEval.eval(where, table.schema(), located.row(), schema::resolve)) continue;
             targets.add(located);
             if (assignments != null) {
@@ -40,6 +48,7 @@ public class Mutate extends Operator {
                     row.values().set(column, StorageEngine.cast(table.schema(), column, entry.getValue()));
                 }
                 storage.validateRecord(storage.rowToBytes(table.schema(), row));
+                checker.check(table, row, located, snapshot);
                 replacements.add(row);
             }
         }

@@ -13,9 +13,12 @@ import static org.junit.Assert.*;
 /**
  * NULL 三值逻辑回归测试。
  *
- * 本项目 SQL 无法表达 NULL 字面量（无 NULL 关键字），表的列值永不为 NULL；
- * 故 NULL 只能由 LEFT JOIN 的未匹配行合成出来（见 Join.nulls）。这组用例锁住
- * {@link com.course.dbms.engine.exec.op.Compare} 的两条相反规则：
+ * 上半部分（前 8 个用例）的 NULL 全部由 LEFT JOIN 的未匹配行合成（见 Join.nulls）——
+ * 它们是 {@code Compare.apply} 与 {@code CondEval.eval} 的历史护栏。下半部分改从写入侧
+ * 直接造 NULL：SQL 现在有 NULL 字面量，省略列也会补 NULL，存储层用 {@code len = -1}
+ * 标记空值。两条路径产生的 NULL 必须遵守同一套规则。
+ *
+ * 这组用例锁住 {@link com.course.dbms.engine.exec.op.Compare} 的两条相反规则：
  *   谓词（apply）—— 与 NULL 的任何比较都是 UNKNOWN，WHERE 不保留该行；
  *   排序（compare）—— NULL 位置必须确定：升序垫底、降序在最前。
  *
@@ -137,5 +140,99 @@ public class NullSemanticsTest {
         seed();
         Result r = db.execute(BASE + "order by u.id desc");
         assertArrayEquals(new long[] {3, 2, 1}, ids(r));
+    }
+
+    // ---- 真 NULL：NULL 字面量 + 省略列，直接从 SQL 写进表 ----
+    //
+    // 上面 8 个用例的 NULL 都来自 LEFT JOIN 的合成列。这组改从写入侧造 NULL：
+    // 存储层用 len = -1 标记空值，读回来必须还是 NULL，且六算子的三值逻辑不变。
+
+    /** id=1 的 v 有值(10)，id=2 省略列补 NULL，id=3 显式 NULL。 */
+    private void seedNulls() {
+        db.execute("create table t (id int32, v int32)");
+        db.execute("insert into t values (1, 10)");
+        db.execute("insert into t (id) values (2)");
+        db.execute("insert into t values (3, null)");
+    }
+
+    /** 真 NULL 走一遍完整往返：写入 → 落盘 → 扫描 → 投影。 */
+    @Test public void realNullsSurviveStorageRoundTrip() {
+        seedNulls();
+        Result r = db.execute("select id, v from t order by id");
+        assertEquals(3, r.rows.size());
+        assertEquals(10, ((Number) r.rows.get(0).get(1)).intValue());
+        assertNull(r.rows.get(1).get(1));       // 省略列 → NULL
+        assertNull(r.rows.get(2).get(1));       // 显式 null → NULL
+    }
+
+    /** `where v = null` 是 UNKNOWN → 0 行；不能抛异常（NullPointer 会掐断连接）。 */
+    @Test public void nullLiteralInWhereMatchesNothing() {
+        seedNulls();
+        assertArrayEquals(new long[] {}, ids(db.execute("select id from t where v = null order by id")));
+        assertArrayEquals(new long[] {}, ids(db.execute("select id from t where v <> null order by id")));
+        // 关键：上一条语句没有把库搞坏，后续查询照常
+        assertArrayEquals(new long[] {1}, ids(db.execute("select id from t where v = 10 order by id")));
+    }
+
+    /** 真 NULL 同样被所有比较谓词排除（与 LEFT JOIN 合成的 NULL 一致）。 */
+    @Test public void realNullFailsEveryComparison() {
+        seedNulls();
+        assertArrayEquals(new long[] {1}, ids(db.execute("select id from t where v > 5 order by id")));
+        assertArrayEquals(new long[] {},  ids(db.execute("select id from t where v < 5 order by id")));
+        assertArrayEquals(new long[] {},  ids(db.execute("select id from t where v <> 10 order by id")));
+        // v = v 自比也捞不出 NULL
+        assertArrayEquals(new long[] {1}, ids(db.execute("select id from t where v = v order by id")));
+    }
+
+    @Test public void realNullSortsLastAscending() {
+        seedNulls();
+        Result r = db.execute("select v from t order by v");
+        assertEquals(3, r.rows.size());
+        assertEquals(10, ((Number) r.rows.get(0).get(0)).intValue());
+        assertNull(r.rows.get(1).get(0));
+        assertNull(r.rows.get(2).get(0));
+    }
+
+    /** UPDATE 写 NULL：真 NULL 也能由 DML 产生，后续谓词必须一视同仁。 */
+    @Test public void updateCanWriteRealNull() {
+        seedNulls();
+        db.execute("update t set v = null where id = 1");
+        assertArrayEquals(new long[] {}, ids(db.execute("select id from t where v > 0 order by id")));
+
+        Result r = db.execute("select v from t order by id");
+        for (Row row : r.rows) assertNull(row.get(0));
+    }
+
+    /** 聚合照旧忽略 NULL：2 行 NULL 不计入 COUNT(v)，SUM 只看有值的那行。 */
+    @Test public void aggregateIgnoresRealNull() {
+        seedNulls();
+        Result r = db.execute("select count(v), sum(v), count(*) from t");
+        assertEquals(1, r.rows.size());
+        assertEquals(1L, ((Number) r.rows.get(0).get(0)).longValue());   // 只有 id=1 有值
+        assertEquals(10L, ((Number) r.rows.get(0).get(1)).longValue());
+        assertEquals(3L, ((Number) r.rows.get(0).get(2)).longValue());   // COUNT(*) 数行
+    }
+
+    /** 带索引的列上有 NULL 行时，索引扫描不能把 NULL 行捞出来，也不能漏掉非 NULL 行。 */
+    @Test public void indexScanWithNullsInTable() {
+        seedNulls();
+        db.execute("create index idx_v on t(v)");
+        assertArrayEquals(new long[] {1}, ids(db.execute("select id from t where v = 10 order by id")));
+        assertArrayEquals(new long[] {},  ids(db.execute("select id from t where v = 0 order by id")));
+        // 范围扫描（索引的另一条出口）同样不能放进 NULL 行
+        assertArrayEquals(new long[] {1}, ids(db.execute("select id from t where v >= 10 order by id")));
+    }
+
+    /** NULL 标记真的落进了页文件：重开数据库后仍是 NULL，不会被解成 0 或空串。 */
+    @Test public void realNullSurvivesReopen() {
+        seedNulls();
+        db.close();
+        db = new Database(dir);
+
+        Result r = db.execute("select v from t order by id");
+        assertEquals(3, r.rows.size());
+        assertEquals(10, ((Number) r.rows.get(0).get(0)).intValue());
+        assertNull(r.rows.get(1).get(0));
+        assertNull(r.rows.get(2).get(0));
     }
 }

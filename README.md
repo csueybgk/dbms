@@ -22,17 +22,26 @@
 | ② 存储系统提供接口供数据库模块调用 | `Cache` / `PageManager` 接口，被 `StorageEngine` 调用 | 存储系统 |
 | ③ 执行引擎：CreateTable / Insert / SeqScan / Filter / Project | `Executor` + `op/*` 七算子（另有 Sort/Join/Aggregate/IndexScan） | 数据库引擎 |
 | ③ 存储引擎：行与页映射、磁盘组织 | `StorageEngine`（槽位化页）+ `DiskManager` | 数据库引擎 |
-| ③ 系统目录：元数据作为特殊表存储 | `Catalog`（`sys_tables` / `sys_columns` / `sys_indexes` 用同一引擎存取） | 数据库引擎 |
+| ③ 系统目录：元数据作为特殊表存储 | `Catalog`（`sys_tables` / `sys_columns` / `sys_indexes` / `sys_constraints` 用同一引擎存取） | 数据库引擎 |
 | ③ 复杂索引：B+ 树 + 索引扫描 | `engine/index/*` + `op/IndexScan`（见 § 八） | 数据库引擎 |
 | 客户端与服务器端交互 | `server/*` + `client/*` + `protocol/*` | —— |
 
 **支持语句**（一个最小但完整的 SQL 子集）：
 
 ```sql
-create table t (name type, ...);           -- 类型: int32 int64 float64 bool string datetime
-insert into t values (v, ...);
+-- 建表：列定义 + 完整性约束（列级写法，可带 constraint <名>）
+create table t (id int32 primary key,           -- 类型: int32 int64 float64 bool string datetime
+                name string not null,
+                age  int32 default 18,
+                email string unique,
+                score int32 check (score >= 0));
+create table p (a int32, b int32, primary key (a, b));   -- 表级写法：复合主键 / 复合 unique / 表级 check
+insert into t (id, name) values (1, 'alice');   -- 可给列清单；未列出的列取 DEFAULT，无 DEFAULT 则 NULL
+insert into t values (2, 'bob', null, null, null);       -- 也可按位给全列；NULL 是合法字面量
+delete from t where id = 2;
+update t set age = 20, name = 'bobby' where id = 2;
 select * | col, ... from t
-       [where col op value (and|or col op value)*]
+       [where col op value (and|or col op value)*]       -- 操作符: = <> < > <= >= and or
        [order by col asc|desc];
 -- 多表联查 / 聚合（高级功能之二）：
 select <列 | 聚合(列)>, ... from t1 [AS a]
@@ -40,14 +49,17 @@ select <列 | 聚合(列)>, ... from t1 [AS a]
        [where ...] [group by 列, ...] [order by 列|聚合输出名 asc|desc];
 聚合函数: count(*) count(col) sum(col) avg(col) min(col) max(col)
 show tables;
-show table <name>;                          -- 操作符: = <> < > <= >= and or
+show table <name>;                          -- 列 / 类型 / 约束 三列（多列约束另起一行，第一列为 "(table)"）
 -- 复杂索引（高级功能之三）：
 create index <名> on <表>(<列>);             -- 在单列上建 B+ 树索引
 show indexes [on <表>];                     -- 查看已建索引
 begin;  commit;  rollback;                  -- 事务控制：每条语句默认自动提交，begin 开启显式事务
 ```
 
-另外落地了图片底部**高级功能之一：事务与并发**（§ 六，并扩展出 **崩溃恢复 WAL** § 九）、**高级功能之二：多表联查与聚合**（§ 七）、**复杂索引**（§ 八），详见 [三大模块详解.md](三大模块详解.md)。
+> 约束关键字 `NULL / DEFAULT / PRIMARY / KEY / UNIQUE / CHECK / CONSTRAINT`（以及只为定向报错而保留的 `FOREIGN / REFERENCES`）已成为**保留字**，不能再当列名或表名用——本项目没有转义标识符的语法。
+> 另外词法器不认负号，`-1` 会报 `LX-0001`（见 § 十一 的已知限制）。
+
+另外落地了图片底部**高级功能之一：事务与并发**（§ 六，并扩展出 **崩溃恢复 WAL** § 九）、**高级功能之二：多表联查与聚合**（§ 七）、**复杂索引**（§ 八），以及**完整性约束与 NULL**（§ 十），详见 [三大模块详解.md](三大模块详解.md)。
 
 ---
 
@@ -60,7 +72,7 @@ begin;  commit;  rollback;                  -- 事务控制：每条语句默认
 
 ```bash
 cd dbms
-mvn test                # 运行全部测试（共 138 个用例）
+mvn test                # 运行全部测试（共 232 个用例）
 mvn package             # 打包出 target/dbms-1.0.0.jar
 ```
 
@@ -97,7 +109,7 @@ dbms> \d users      -- 同 show table users
 dbms> \q            -- 退出
 ```
 
-> 想**一条一条核对输出**（而不是一把梭 `DEMO.sql`），照 [手工测试清单.md](手工测试清单.md) 走：43 步，前 39 步的期望输出是从真实引擎实测抄下来的，覆盖 JOIN / NULL 三值逻辑 / 索引 / 聚合 / 事务 / 崩溃恢复 / 并发锁。
+> 想**一条一条核对输出**（而不是一把梭 `DEMO.sql`），照 [手工测试清单.md](手工测试清单.md) 走：50 步，前 46 步的期望输出是从真实引擎实测抄下来的，覆盖约束 / JOIN / NULL 三值逻辑 / 索引 / 聚合 / 事务 / 崩溃恢复 / 并发锁。
 
 `run.ps1` 还支持 `open`（打开已有库重启恢复）、`build`、`test`；macOS/Linux 用 `run.sh`，cmd 用 `run.bat`。
 跨平台的批处理/非交互用法：
@@ -122,6 +134,7 @@ dbms/
     │   │                     Cache / LruCache / FifoCache / Log（崩溃恢复预写日志）
     │   ├── engine/
     │   │   ├── table/      FieldType / Schema / Row / Table / Catalog / CombinedSchema —— 行、结构、多表拼接列
+    │   │                     Constraint / ConstraintChecker —— 约束元数据 + 写盘前的权威检查点
     │   │   ├── index/      BPlusTree / Index / IndexManager —— B+ 树索引（内存树 + 元数据入目录）
     │   │   ├── storage/    StorageEngine  —— ③ 存储引擎（行↔页映射）
     │   │   └── exec/       Executor + op/*（SeqScan/IndexScan/Filter/Project/Sort/Join/Aggregate/CondEval/Compare）
@@ -131,7 +144,7 @@ dbms/
     │   ├── protocol/       Package / Packager / Encoder / Decoder —— 客户端/服务端分帧协议
     │   ├── server/         Server / ConnectionHandler / ServerLauncher
     │   └── client/         ClientLauncher / Shell / Renderer
-    └── test/java/com/course/dbms/    —— 分模块单元/集成/端到端测试（138 个用例）
+    └── test/java/com/course/dbms/    —— 分模块单元/集成/端到端测试（232 个用例）
 ```
 
 ---
@@ -219,7 +232,7 @@ dbms> select u.dept, count(*), avg(o.amount)
         group by u.dept order by count(*) desc;
 ```
 
-**暂不支持**（作为扩展方向，见 § 十一）：`RIGHT/FULL JOIN`、`HAVING`、`DISTINCT`、多表达式 `GROUP BY`、子查询、标量函数、`ORDER BY <序号>`。
+**暂不支持**（作为扩展方向，见 § 十二）：`RIGHT/FULL JOIN`、`HAVING`、`DISTINCT`、多表达式 `GROUP BY`、子查询、标量函数、`ORDER BY <序号>`。
 
 ---
 
@@ -247,7 +260,7 @@ dbms> select id from users where age > 24 order by age;
 - **持久化取舍**：索引是**派生数据**，只有元数据进系统目录表 `sys_indexes`，B+ 树本身在内存里，`Catalog.reload()` 时**重扫基表重建**。好处是与影子页事务/WAL 天然解耦：提交后重建即生效，回滚后重建即撤销（`Session` 的 `ROLLBACK` 本来就会调 `reload()`）。`Insert` 算子插入成功后顺手把新 RID 记进该表所有索引；`DELETE` / `UPDATE` 批量修改后重建目标表索引，移除旧键和旧 RID。
 - **并发**：建索引对目标表加 X 锁（要扫全表，必须挡住并发写），所以内存索引不会被别的会话边扫边改。
 
-相关用例见 § 十 `engine/index/BPlusTreeTest`（分裂/树高/重复键/范围/有序）与 `db/IndexTest`（建索引前后结果一致、重启重建、事务回滚撤销）。
+相关用例见 § 十一 `engine/index/BPlusTreeTest`（分裂/树高/重复键/范围/有序）与 `db/IndexTest`（建索引前后结果一致、重启重建、事务回滚撤销）。
 
 ---
 
@@ -276,44 +289,114 @@ dbms> insert into users values (5, 'eve', 27, 88.0);
 dbms> commit;            -- 先写 WAL 再落页；此刻 kill 掉服务端，重启后 eve 仍在
 ```
 
-演示：`.\run.ps1 create data\db` → 起服务端 → 上面 `begin/insert/commit` → 直接结束服务端进程（模拟崩溃）→ `.\run.ps1 open data\db` 重启 → `eve` 仍在；若在途中未 COMMIT 就崩溃，重启后该行消失。相关用例见 § 十 `LogTest` / `CrashRecoveryTest`。
+演示：`.\run.ps1 create data\db` → 起服务端 → 上面 `begin/insert/commit` → 直接结束服务端进程（模拟崩溃）→ `.\run.ps1 open data\db` 重启 → `eve` 仍在；若在途中未 COMMIT 就崩溃，重启后该行消失。相关用例见 § 十一 `LogTest` / `CrashRecoveryTest`。
 
 ---
 
-## 十、测试
+## 十、完整性约束与 NULL
 
-`mvn test` 全绿，共 **138 个用例**，按模块覆盖：
+把「建表」从"只有列名 + 类型"提升到"能声明数据必须满足的条件"，并让这些条件在写入时真正生效。
+
+```sql
+dbms> create table t (id int32 primary key, name string not null, age int32 default 18,
+                      email string unique, score int32 check (score >= 0));
+dbms> insert into t (id, name) values (1, 'alice');   -- age=18（DEFAULT），email/score 为 NULL
+dbms> insert into t (id) values (2);                  -- ✗ SE-0010：name 不能为 NULL
+dbms> insert into t (id, name) values (1, 'bob');     -- ✗ SE-0011：主键重复
+dbms> show table t;                                   -- 多出第三列 constraint
+```
+
+### 约束种类与两种写法
+
+| 约束 | 列级写法 | 表级写法 | 语义 |
+|------|---------|---------|------|
+| 非空 | `name string not null` | —— | 该列不许为 NULL（`PRIMARY KEY` 隐含 NOT NULL） |
+| 默认值 | `age int32 default 18` | —— | INSERT 未提供该列时补这个值（显式给 NULL 也覆盖默认值） |
+| 主键 | `id int32 primary key` | `primary key (a, b)` | 非空 + 唯一；每表至多一个（否则 `SE-0016`） |
+| 唯一 | `email string unique` | `unique (a, b)` | 键值不许重复；**含 NULL 的键不参与判重**（NULL 互不相等，可有多行） |
+| 检查 | `score int32 check (score >= 0)` | `check (a <= b)` | 条件求值为 **FALSE** 才拒绝，UNKNOWN（表达式里有 NULL）按 SQL 语义放行 |
+
+任何约束都能用 `constraint <名字>` 起名（`id int32 constraint pk_t primary key`），名字在同一张表内不能重复（`SE-0015`）。
+
+### 三处关键设计
+
+- **权威检查点在写入算子**（`Insert` / `Mutate` 写盘之前），不在 Analyzer。唯一性/非空性依赖表中的实际数据，只有持数据的一方能判定；`Analyzer` 只做"看 AST 就能判定"的静态检查（列存在、DEFAULT 与列类型相容、约束名不重复）。这与项目一贯原则一致：**预检是为了快速失败和友好报错，正确性由唯一的权威写入点保证**。
+- **DEFAULT 的字面量存原文、解析成对应 Java 类型**，不走 `StorageEngine.cast` —— 那个会把 `default 1.5` 给 int32 时**静默截断成 1**；`FieldType.parseLiteral` 遇到形状不符直接报 `SE-0005`。
+- **CHECK 表达式存 SQL 文本**（`Cond.toSql()` 而不是 `toString()`）：后者对字符串字面量不加引号，`check (name <> 'alice')` 会渲染成 `name <> alice`，重新解析时走成"列 vs 列"，**静默变成另一个条件**。落盘的同时要能原样解析回来，所以加了 `Cond.toSql()` + `Parser.parseCondition(String)`。
+
+### NULL 支持（NOT NULL 的前提）
+
+原来 SQL 表达不了 NULL、磁盘格式也没有空值标记，于是没有任何数据能违反 NOT NULL。这次一并补齐：
+
+- **语法**：`NULL` 成为字面量，可用于 INSERT 值与 WHERE 谓词；INSERT 可给列清单，未列出的列取 DEFAULT / NULL。
+- **磁盘格式**：每列仍是 `[4字节长度][字节]`，**长度 `-1` 表示该列为 NULL**（不写后续字节）。空串是长度 0，两者不同。非空值的编码字节完全没变，老数据照读。
+- **三值逻辑**：`CondEval.evalTri` 返回 TRUE/FALSE/UNKNOWN，`eval` 退化为其包装（可证明等价，8 个 `NullSemanticsTest` 用例是护栏）。谓词里与 NULL 的任何比较都是 UNKNOWN → WHERE 不保留该行；排序仍 NULLS LAST。
+- **索引跳过 NULL 键**：B+ 树的 `search(null)` 表示"该侧无界"，会返回**整棵树**，所以 NULL 绝不能进索引（`IndexManager.createIndex` / `onInsert` 都显式跳过）。
+- **协议层同样用 `-1` 长度前缀传 NULL**：走 `String.valueOf` 会把空值变成文本 `"null"`，客户端既分不清它和字符串 `'null'`，也没法按空值渲染。
+
+> **为什么约束元数据另开一张 `sys_constraints`（id = 4），而不是给 `sys_columns` 加一列**：`rowFromBytes` 按 `schema.columnCount()` 循环读字段，加列会让仓库自带的 `data/db`（4 字段记录）在读第 5 个字段时 EOF 报 `SE-0008`；而所有 JUnit 用例都会先清目录，**没有测试能发现这个回归**。新开表则完全向后兼容：老库加载后这些表就是"无约束"。
+
+**已知限制**：词法器不认负号（`-1` 会报 `LX-0001`），所以 `check` 约束里的边界要用上界表达（`check (score <= 100)`）；约束关键字成为保留字后不能再用作列名/表名；`ALTER TABLE` 与 `DROP TABLE` 仍未实现，约束只能在建表时声明。
+
+---
+
+## 十一、测试
+
+`mvn test` 全绿，共 **232 个用例**，按模块覆盖：
+
+### 存储系统（②）
 
 | 测试类 | 数量 | 覆盖 |
 |--------|-----|------|
-| `PageTest` | 7 | 页读写、跨字节、页满返回 -1、落盘重载、LRU 淘汰、命中统计 |
+| `storage/PageTest` | 7 | 页读写、跨字节、页满返回 -1、落盘重载、LRU 淘汰、命中统计 |
 | `storage/LogTest` | 4 | 崩溃恢复：已提交事务重放、未提交丢弃、撕裂尾部容错、重放幂等 |
-| `StorageTest` | 3 | 多行读写、跨页变长字符串、重开恢复 |
-| `CatalogTest` | 4 | 建表取表、重复建表报错、表不存在、目录持久化重开 |
+| `engine/StorageTest` | 3 | 多行读写、跨页变长字符串、重开恢复 |
+| `engine/NullStorageTest` | 8 | **空值存储**：六种类型的 NULL 往返、NULL 与空串/0 互不混淆、NULL 与实值混存、重开仍是 NULL、索引跳过 null 键、重建索引也不收 null |
+
+### 数据库引擎（③）
+
+| 测试类 | 数量 | 覆盖 |
+|--------|-----|------|
+| `engine/CatalogTest` | 4 | 建表取表、重复建表报错、表不存在、目录持久化重开 |
 | `engine/index/BPlusTreeTest` | 7 | B+ 树：多次分裂与树高增长、重复键返回全部 RID、范围开闭区间、跨叶子有序、清空、空树 |
-| `ParserTest` | 18 | 四类语句解析、分号容错、语法错误、未知类型、JOIN/聚合/GROUP BY、CREATE INDEX / SHOW INDEXES |
-| `AnalyzerTest` | 20 | 存在性 / 类型 / 列数 / 列名重复、JOIN 限定/歧义、聚合分组规则、索引列与索引名（SE-0004/SE-0007） |
-| `PlanBuilderTest` | 19 | 计划树形状、JOIN 左链、Aggregate/Sort 根、**索引选择**（有索引→IndexScan、OR/<>/无索引→SeqScan、区间端点） |
-| `DatabaseTest` | 5 | 全链路 create/insert/select/show、where 与 or、重开恢复、错误传播 |
-| `ProtocolTest` | 3 | Result 编解码回环、分帧粘包防护 |
-| `ServerClientTest` | 2 | 真实 Socket 往返、错误标志回传 |
-| `E2ETest` | 1 | 客户端 `-f DEMO.sql` 端到端联调（含 CREATE INDEX / SHOW INDEXES） |
+
+### SQL 编译器（①）
+
+| 测试类 | 数量 | 覆盖 |
+|--------|-----|------|
+| `compiler/ParserTest` | 18 | 四类语句解析、分号容错、语法错误、未知类型、JOIN/聚合/GROUP BY、CREATE INDEX / SHOW INDEXES |
+| `compiler/ConstraintParseTest` | 24 | **约束文法**：列级/表级约束、命名约束、复合 PK/UNIQUE、`NULL` 字面量、INSERT 列清单、期望符号集、外键的定向报错 |
+| `compiler/AnalyzerTest` | 28 | 存在性 / 类型 / 列数 / 列名重复、JOIN 限定/歧义、聚合分组规则、索引列与索引名（SE-0004/SE-0007）、**约束名重复/多主键/DEFAULT 形状/未知约束列**（SE-0015/SE-0016/SE-0005/SE-0004） |
+| `compiler/PlanBuilderTest` | 19 | 计划树形状、JOIN 左链、Aggregate/Sort 根、**索引选择**（有索引→IndexScan、OR/<>/无索引→SeqScan、区间端点） |
+| `compiler/TracerTest` | 11 | 四阶段编译 trace：Token 流 / AST / 语义 / 计划，语法错误的期望符号集，`null` 字面量与约束进入 trace |
+| `db/DatabaseTest` | 5 | 全链路 create/insert/select/show、where 与 or、重开恢复、错误传播 |
+
+### 端到端 / 事务 / 交互
+
+| 测试类 | 数量 | 覆盖 |
+|--------|-----|------|
+| `db/ConstraintTest` | 27 | **约束端到端**：PK/NOT NULL/DEFAULT/UNIQUE/CHECK 真正拦住写入、复合键、约束与 NULL 的交互、UPDATE 自查跳过、无部分写入、重启后约束仍在、回滚撤销 |
+| `db/NullSemanticsTest` | 16 | NULL 三值逻辑：六个运算符都不放行 NULL、`x = x` 不匹配、真实 NULL 走六算子、`where x = null` 返回 0 行、升序垫底/降序最前、聚合忽略 NULL、索引扫描带 NULL |
+| `db/MutationTest` | 6 | UPDATE/DELETE 端到端：更新与删除、类型不符报错、**无部分写入**（一条语句中途失败不留半截结果） |
 | `db/JoinAggTest` | 7 | 端到端：INNER/LEFT JOIN、COUNT/SUM/AVG/MIN/MAX、GROUP BY、聚合排序 |
-| `db/NullSemanticsTest` | 8 | NULL 三值逻辑：六个运算符都不放行 NULL、`x = x` 不匹配、列列比较、升序垫底/降序最前、聚合忽略 NULL |
-| `db/CrashRecoveryTest` | 2 | 崩溃重开：已提交事务仍在、未提交事务消失 |
 | `db/IndexTest` | 13 | 端到端：建索引前后结果一致、等值/范围/排序、insert 维护、show indexes、重启重建、事务回滚撤销 |
-| `txn/LockManagerTest` | 6 | 表级 S/X 锁：共存、互斥超时、阻塞后释放、重入升级、跨表释放 |
 | `db/TxnTest` | 7 | 事务：回滚无痕、提交重启仍在、读己之写、建表回滚、重复 BEGIN、双线程隔离 |
+| `db/CrashRecoveryTest` | 2 | 崩溃重开：已提交事务仍在、未提交事务消失 |
+| `txn/LockManagerTest` | 6 | 表级 S/X 锁：共存、互斥超时、阻塞后释放、重入升级、跨表释放 |
+| `protocol/ProtocolTest` | 5 | Result 编解码回环、分帧粘包防护、**NULL 单元格过线仍是空值**（不是文本 `"null"`）、空串不是 NULL |
+| `server/ServerClientTest` | 2 | 真实 Socket 往返、错误标志回传 |
 | `server/ConcurrencyTest` | 2 | 真实双连接：写锁阻塞读、并行 insert 不丢更新 |
+| `client/E2ETest` | 1 | 客户端 `-f DEMO.sql` 端到端联调（含 CREATE INDEX / SHOW INDEXES / 约束） |
 
 ---
 
-## 十一、扩展方向（图片底部高级功能，作为加分项）
+## 十二、扩展方向（图片底部高级功能，作为加分项）
 
-**事务与并发**（§ 六）、**多表联查与聚合**（§ 七）、**复杂索引**（§ 八）已实现，其余**高级功能**属于加分项：
+**事务与并发**（§ 六）、**多表联查与聚合**（§ 七）、**复杂索引**（§ 八）、**完整性约束与 NULL**（§ 十）已实现，其余**高级功能**属于加分项：
 
 - **查询优化**：`PlanBuilder` 已会做最简单的物理计划选择（索引 vs 全表扫）；可继续做谓词下推、投影裁剪、**代价估算**（现在只要命中索引就走，不看选择率）、**多条件组合选索引**（现在只挑第一个能用的合取项）、`OR` 改写成 `UNION` 以便各支分别走索引。
-- **索引深化**：多列（复合）索引、唯一索引、索引下推（把 `WHERE` 的其余条件也交给索引过滤）、把 B+ 树的分裂/合并真正落到【页】上（现在树在内存、元数据在目录表）、`DROP INDEX`。
+- **索引深化**：多列（复合）索引、唯一索引（把 `UNIQUE` 约束落成真正的唯一索引——现在 `UNIQUE` 靠全表扫描判重、不自动建索引，为的是不动 `show indexes` 的既有输出）、索引下推（把 `WHERE` 的其余条件也交给索引过滤）、把 B+ 树的分裂/合并真正落到【页】上（现在树在内存、元数据在目录表）、`DROP INDEX`。
+- **约束深化**：`FOREIGN KEY`（解析器已对 `foreign key` / `references` 给出定向的"暂不支持"报错）、`ALTER TABLE ADD/DROP CONSTRAINT`、`DROP TABLE`、`CHECK` 里的算术表达式与负数字面量（见 § 十 已知限制）。
 - **JOIN/聚合深化**：`RIGHT/FULL JOIN`、`HAVING`、`DISTINCT`、多表达式 `GROUP BY`、`ORDER BY <序号>`、子查询、标量函数。
 - **权限控制**：`Session` 可加分角色判断后 `Database.execute` 拦截。
 - 事务侧可再往深处做：`SAVEPOINT`、多隔离级别（READ COMMITTED/REPEATABLE READ）、undo 日志与 checkpoint（WAL redo 已实现，见 § 九）、页级锁/意向锁。

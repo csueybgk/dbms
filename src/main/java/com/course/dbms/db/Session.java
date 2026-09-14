@@ -37,6 +37,7 @@ public class Session {
     private static final int SYS_TABLES = Catalog.SYS_TABLES_ID;
     private static final int SYS_COLUMNS = Catalog.SYS_COLUMNS_ID;
     private static final int SYS_INDEXES = Catalog.SYS_INDEXES_ID;
+    private static final int SYS_CONSTRAINTS = Catalog.SYS_CONSTRAINTS_ID;
 
     private final Database db;
     private final LockManager locks;
@@ -152,6 +153,7 @@ public class Session {
         } else if (stmt instanceof CreateStmt) {
             req.add(new int[]{SYS_TABLES, 1});
             req.add(new int[]{SYS_COLUMNS, 1});
+            req.add(new int[]{SYS_CONSTRAINTS, 1});   // 约束元数据同样要写，需一并串行化
         } else if (stmt instanceof CreateIndexStmt) {
             // 建索引要扫全表，必须挡住并发写（否则扫描期间插入的行会漏进索引）
             CreateIndexStmt ci = (CreateIndexStmt) stmt;

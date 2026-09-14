@@ -16,6 +16,7 @@ public class Lexer {
     // 行列游标：只前进不后退，多次调用总计 O(n)
     private int line = 1;
     private int lineStart = 0;   // 当前行首字符在 sql 中的 offset
+    private int scanned = 0;     // 已扫描到哪个 offset（推进 line/lineStart 用）
 
     public Lexer(String sql) {
         this.sql = sql;
@@ -130,9 +131,14 @@ public class Lexer {
 
     /** offset -> [1-based 行号, 1-based 列号]。游标只前进，多次调用总计 O(n)。 */
     private int[] lineCol(int offset) {
-        while (lineStart < offset) {
-            if (sql.charAt(lineStart) == '\n') line++;
-            lineStart++;
+        // 用独立的 scanned 游标推进，不能用 lineStart 当游标 —— 那样它会被推到 offset 上，
+        // 行首 offset 丢失，列号恒为 1（除行首 token 外全部算错）
+        while (scanned < offset) {
+            if (sql.charAt(scanned) == '\n') {
+                line++;
+                lineStart = scanned + 1;
+            }
+            scanned++;
         }
         return new int[] { line, offset - lineStart + 1 };
     }

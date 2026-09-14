@@ -18,6 +18,7 @@ import com.course.dbms.compiler.ast.TxnStmt;
 import com.course.dbms.compiler.token.Token;
 import com.course.dbms.compiler.token.TokenType;
 import com.course.dbms.engine.table.Column;
+import com.course.dbms.engine.table.Constraint;
 import com.course.dbms.engine.table.FieldType;
 
 import java.util.ArrayList;
@@ -33,10 +34,19 @@ import java.util.List;
  *
  * 文法（附录在 三大模块详解.md）：
  *   stmt     := create | insert | select | show
- *   create   := CREATE TABLE IDENT '(' colDef (',' colDef)* ')'
+ *   create   := CREATE TABLE IDENT '(' (colDef | tableConstraint) (',' ...)* ')'
  *             | CREATE INDEX IDENT ON IDENT '(' IDENT ')'
- *   colDef   := IDENT TYPE      (TYPE ∈ int32/int64/float64/bool/string/datetime)
- *   insert   := INSERT INTO IDENT VALUES '(' value (',' value)* ')'
+ *   colDef   := IDENT TYPE colConstraint*   (TYPE ∈ int32/int64/float64/bool/string/datetime)
+ *   colConstraint := [CONSTRAINT IDENT] ( NOT NULL | NULL | PRIMARY KEY | UNIQUE
+ *                                       | DEFAULT (value|NULL) | CHECK '(' cond ')' )
+ *   tableConstraint := [CONSTRAINT IDENT] ( PRIMARY KEY '(' IDENT,... ')'
+ *                                         | UNIQUE      '(' IDENT,... ')'
+ *                                         | CHECK '(' cond ')' )
+ *   insert   := INSERT INTO IDENT [ '(' IDENT (',' IDENT)* ')' ]
+ *               VALUES '(' value (',' value)* ')'      (value 可为 NULL)
+ *
+ * 注意：NULL/DEFAULT/PRIMARY/KEY/UNIQUE/CHECK/CONSTRAINT 成为保留字后不可再用作列名或表名
+ * （本项目没有转义标识符语法）。
  *   select   := SELECT '*' | selItem (',' selItem)*
  *              FROM table (join)* [WHERE cond] [GROUP BY colRef (',' colRef)*]
  *              [ORDER BY orderKey [ASC|DESC]]
@@ -112,14 +122,116 @@ public class Parser {
         String name = expectIdent();
         expect(TokenType.LPAREN);
         List<Column> cols = new ArrayList<>();
+        List<Constraint> cons = new ArrayList<>();
         do {
-            String colName = expectIdent();
-            String typeName = expectIdent();
-            FieldType ft = FieldType.fromName(typeName);   // 非法类型抛 SE-0002
-            cols.add(new Column(colName, ft));
+            // 括号里的每一项要么是列定义，要么是表级约束 —— 靠首个 token 区分
+            if (isConstraintStart(peek().type)) parseTableConstraint(cons);
+            else parseColumnDef(cols, cons);
         } while (match(TokenType.COMMA));
         expect(TokenType.RPAREN);
-        return new CreateStmt(name, cols);
+        return new CreateStmt(name, cols, cons);
+    }
+
+    /**
+     * 一个约束（列级或表级）可能以哪些 token 开头。
+     * 列级要认全 NOT / NULL / DEFAULT，否则 `name string not null`、`age int32 default 18`
+     * 会在列定义后直接跳出约束循环，报成 "expected ')' but got 'not'"。
+     * FOREIGN / REFERENCES 只为了给出"暂不支持"的定向报错（parseTableConstraint / parseColConstraint 里）。
+     */
+    private static boolean isConstraintStart(TokenType t) {
+        switch (t) {
+            case CONSTRAINT: case PRIMARY: case UNIQUE: case CHECK: case FOREIGN:
+            case NOT: case NULL: case DEFAULT: case REFERENCES:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** colDef := IDENT TYPE colConstraint* —— 列级约束顺带生成对应的 Constraint。 */
+    private void parseColumnDef(List<Column> cols, List<Constraint> cons) {
+        String colName = expectIdent();
+        String typeName = expectIdent();
+        FieldType ft = FieldType.fromName(typeName);       // 非法类型抛 SE-0002
+        cols.add(new Column(colName, ft));
+        while (isConstraintStart(peek().type)) {
+            parseColConstraint(colName, cons);
+        }
+    }
+
+    /**
+     * colConstraint := [CONSTRAINT IDENT] ( NOT NULL | NULL | PRIMARY KEY | UNIQUE
+     *                                     | DEFAULT (value|NULL) | CHECK '(' cond ')' )
+     * 列级写法一律生成"只引用该列"的 Constraint（复合 PK/UNIQUE 只能写成表级）。
+     */
+    private void parseColConstraint(String colName, List<Constraint> cons) {
+        String cname = parseConstraintName();
+        if (match(TokenType.NOT)) {
+            expect(TokenType.NULL);
+            cons.add(Constraint.onColumn(Constraint.Kind.NOT_NULL, cname, colName, null));
+        } else if (match(TokenType.NULL)) {
+            // 显式 NULL = 可空，是默认行为；不生成约束，但要认下来（SQL 常见写法）
+        } else if (match(TokenType.PRIMARY)) {
+            expect(TokenType.KEY);
+            cons.add(Constraint.onColumn(Constraint.Kind.PRIMARY_KEY, cname, colName, null));
+        } else if (match(TokenType.UNIQUE)) {
+            cons.add(Constraint.onColumn(Constraint.Kind.UNIQUE, cname, colName, null));
+        } else if (match(TokenType.DEFAULT)) {
+            cons.add(Constraint.onColumn(Constraint.Kind.DEFAULT, cname, colName, expectLiteralToken().text));
+        } else if (match(TokenType.CHECK)) {
+            expect(TokenType.LPAREN);
+            Cond c = parseCond();
+            expect(TokenType.RPAREN);
+            cons.add(Constraint.onColumn(Constraint.Kind.CHECK, cname, colName, c.toSql()));
+        } else if (peek().type == TokenType.FOREIGN || peek().type == TokenType.REFERENCES) {
+            throw err(peek(), "FOREIGN KEY is not supported");
+        } else {
+            throw err(peek(), "unexpected token: '" + peek().text
+                    + "', expected column constraint: NOT NULL | NULL | PRIMARY KEY | UNIQUE | DEFAULT | CHECK");
+        }
+    }
+
+    /**
+     * tableConstraint := [CONSTRAINT IDENT] ( PRIMARY KEY '(' IDENT,... ')'
+     *                                       | UNIQUE      '(' IDENT,... ')'
+     *                                       | CHECK '(' cond ')' )
+     */
+    private void parseTableConstraint(List<Constraint> cons) {
+        String cname = parseConstraintName();
+        if (match(TokenType.PRIMARY)) {
+            expect(TokenType.KEY);
+            cons.add(new Constraint(Constraint.Kind.PRIMARY_KEY, cname, parseIdentList(), null));
+        } else if (match(TokenType.UNIQUE)) {
+            cons.add(new Constraint(Constraint.Kind.UNIQUE, cname, parseIdentList(), null));
+        } else if (match(TokenType.CHECK)) {
+            expect(TokenType.LPAREN);
+            Cond c = parseCond();
+            expect(TokenType.RPAREN);
+            // 表级 CHECK 可能引用多列，columns 留空表示"整个表"（显示时另起一行）
+            cons.add(new Constraint(Constraint.Kind.CHECK, cname, new ArrayList<String>(), c.toSql()));
+        } else if (peek().type == TokenType.FOREIGN || peek().type == TokenType.REFERENCES) {
+            throw err(peek(), "FOREIGN KEY is not supported");
+        } else {
+            throw err(peek(), "unexpected token: '" + peek().text
+                    + "', expected table constraint: PRIMARY KEY | UNIQUE | CHECK");
+        }
+    }
+
+    /** 可选的 CONSTRAINT <名> 前缀；没写返回空串。 */
+    private String parseConstraintName() {
+        if (!match(TokenType.CONSTRAINT)) return "";
+        return expectIdent();
+    }
+
+    /** '(' IDENT (',' IDENT)* ')' —— 复合键的列清单。 */
+    private List<String> parseIdentList() {
+        expect(TokenType.LPAREN);
+        List<String> names = new ArrayList<>();
+        do {
+            names.add(expectIdent());
+        } while (match(TokenType.COMMA));
+        expect(TokenType.RPAREN);
+        return names;
     }
 
     /** CREATE INDEX <名> ON <表> '(' <列> ')' —— 单列索引。 */
@@ -133,10 +245,15 @@ public class Parser {
         return new CreateIndexStmt(indexName, table, column);
     }
 
+    /**
+     * insert := INSERT INTO IDENT [ '(' IDENT,... ')' ] VALUES '(' value,... ')'
+     * 列清单可省略；写了就只为清单里的列提供值，其余列由 DEFAULT 或 NULL 补全。
+     */
     private Stmt parseInsert() {
         expect(TokenType.INSERT);
         expect(TokenType.INTO);
         String name = expectIdent();
+        List<String> columns = peek().type == TokenType.LPAREN ? parseIdentList() : null;
         expect(TokenType.VALUES);
         expect(TokenType.LPAREN);
         List<Object> values = new ArrayList<>();
@@ -144,7 +261,7 @@ public class Parser {
             values.add(expectLiteral());
         } while (match(TokenType.COMMA));
         expect(TokenType.RPAREN);
-        return new InsertStmt(name, values);
+        return new InsertStmt(name, columns, values);
     }
 
     private Stmt parseDelete() {
@@ -322,10 +439,29 @@ public class Parser {
         return Cond.cmp(lhs.qualifier, lhs.name, op, val);
     }
 
-    /** 字面量：数字 / 字符串 / TRUE / FALSE。报错时给出完整期望集合。 */
+    /**
+     * 字面量：数字 / 字符串 / TRUE / FALSE / NULL。报错时给出完整期望集合。
+     * NULL 只能追加在最后 —— 期望集合文本（"expected: NUMBER | STR_LIT | TRUE | FALSE | NULL"）
+     * 有回归用例断言其前缀。
+     */
     private Object expectLiteral() {
-        Token t = expectAny(TokenType.NUMBER, TokenType.STR_LIT, TokenType.TRUE, TokenType.FALSE);
-        return t.value;
+        return expectLiteralToken().value;
+    }
+
+    /** 同 expectLiteral，但返回整个 token（DEFAULT 需要原文，以便区分 'null' 与 NULL）。 */
+    private Token expectLiteralToken() {
+        return expectAny(TokenType.NUMBER, TokenType.STR_LIT, TokenType.TRUE, TokenType.FALSE, TokenType.NULL);
+    }
+
+    /**
+     * 从独立文本解析一个条件表达式（CHECK 约束落盘后重新解析用）。
+     * 不套一层假 SELECT：那样出错时给出的行列号指向一句并不存在的 SQL。
+     */
+    public static Cond parseCondition(String text) {
+        Parser p = new Parser(text);
+        Cond c = p.parseCond();
+        p.expect(TokenType.EOF);
+        return c;
     }
 
     // ---- 工具 ----

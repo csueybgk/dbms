@@ -25,6 +25,7 @@ import java.util.List;
  * 记录字节格式（每列）：
  *   [4-byte len][字节数组]
  *   固定类型 len 是固定字节数；STRING 是 UTF-8 实际字节数。
+ *   len = -1 表示该列为 NULL（没有后续字节）。空串是 len = 0，两者不同。
  */
 public class StorageEngine {
 
@@ -34,8 +35,13 @@ public class StorageEngine {
         this.pm = pm;
     }
 
-    /** 按类型把值规整到目标 Java 类型（用于插入前的类型检查/转换）。 */
+    /**
+     * 按类型把值规整到目标 Java 类型（用于插入前的类型检查/转换）。
+     * NULL 原样透传：空值没有类型可规整，且下面各分支对 null 会拆箱 NPE
+     * （STRING 更糟——会被 String.valueOf 悄悄变成字符串 "null"）。
+     */
     public static Object cast(Schema schema, int colIndex, Object v) {
+        if (v == null) return null;
         FieldType type = schema.column(colIndex).type();
         try {
             switch (type) {
@@ -66,6 +72,10 @@ public class StorageEngine {
             DataOutputStream out = new DataOutputStream(bos);
             for (int i = 0; i < schema.columnCount(); i++) {
                 Object v = cast(schema, i, row.get(i));
+                if (v == null) {                 // NULL：只写 -1 长度前缀，不落任何字节
+                    out.writeInt(-1);            // （FieldType.encode(null) 会 NPE，必须在此拦下）
+                    continue;
+                }
                 byte[] enc = schema.column(i).type().encode(v);
                 out.writeInt(enc.length);
                 out.write(enc);
@@ -84,6 +94,10 @@ public class StorageEngine {
             List<Object> values = new ArrayList<>();
             for (int i = 0; i < schema.columnCount(); i++) {
                 int len = in.readInt();
+                if (len < 0) {                   // NULL：new byte[-1] 会抛 NegativeArraySizeException，
+                    values.add(null);            // 那是 RuntimeException，会越过 catch(IOException) 掐断连接
+                    continue;
+                }
                 byte[] buf = new byte[len];
                 in.readFully(buf);
                 values.add(schema.column(i).type().decode(buf, 0, len));

@@ -34,6 +34,8 @@ import com.course.dbms.engine.storage.StorageEngine;
 import com.course.dbms.engine.table.Catalog;
 import com.course.dbms.engine.table.Column;
 import com.course.dbms.engine.table.CombinedSchema;
+import com.course.dbms.engine.table.Constraint;
+import com.course.dbms.engine.table.ConstraintChecker;
 import com.course.dbms.engine.table.FieldType;
 import com.course.dbms.engine.table.Row;
 import com.course.dbms.engine.table.Schema;
@@ -90,6 +92,7 @@ public class PlanBuilder {
     private Plan buildCreate(CreateStmt c) {
         Schema schema = new Schema();
         for (Column col : c.columns) schema.add(col.name(), col.type());
+        for (Constraint con : c.constraints) schema.addConstraint(con);   // 约束随结构一起入目录
         Operator op = new CreateTable(catalog, c.tableName, schema);
         return new Plan(op, Collections.singletonList("result"));
     }
@@ -101,12 +104,9 @@ public class PlanBuilder {
 
     private Plan buildInsert(InsertStmt ins) {
         Table table = catalog.getTable(ins.tableName);
-        Schema schema = table.schema();
-        List<Object> vals = new ArrayList<>();
-        for (int i = 0; i < schema.columnCount(); i++) {
-            vals.add(StorageEngine.cast(schema, i, ins.values.get(i)));
-        }
-        Operator op = new Insert(se, table, new Row(vals), catalog.indexManager());
+        // 与 Analyzer 共用同一套解析：支持可选列清单，缺省列按 DEFAULT / NULL 补全
+        Row row = ConstraintChecker.resolveInsert(table.schema(), ins.columns, ins.values);
+        Operator op = new Insert(se, table, row, catalog.indexManager());
         return new Plan(op, Collections.singletonList("affected"));
     }
 
@@ -262,6 +262,9 @@ public class PlanBuilder {
             if (idx == null) continue;                           // 该列没建索引
 
             Object v = StorageEngine.cast(table.schema(), idx.colIndex(), c.value);
+            // 与 NULL 比较恒为 UNKNOWN（Compare.apply 返回 false），结果必为空集。
+            // 而且 v 为 null 会被下面当成"区间端点缺省 = 无穷"，退化成整树扫描。直接跳过。
+            if (v == null) continue;
             Object lo = null, hi = null;
             boolean loInc = false, hiInc = false;
             switch (c.op) {
@@ -352,6 +355,7 @@ public class PlanBuilder {
         if (s.list) {
             return new Plan(new ShowTables(catalog), Arrays.asList("table", "columns"));
         }
-        return new Plan(new ShowTable(catalog, s.tableName), Arrays.asList("column", "type"));
+        // 第三列是约束：必须【追加】在最后 —— 有回归用例断言前两列的位置
+        return new Plan(new ShowTable(catalog, s.tableName), Arrays.asList("column", "type", "constraint"));
     }
 }
