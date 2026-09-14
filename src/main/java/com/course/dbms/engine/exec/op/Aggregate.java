@@ -1,6 +1,7 @@
 package com.course.dbms.engine.exec.op;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.engine.table.FieldType;
 import com.course.dbms.engine.table.Row;
 
@@ -28,14 +29,17 @@ public class Aggregate extends Operator {
         public final int argIdx;        // isAgg：参数列在子管线行中的下标（COUNT(*) 为 -1）
         public final boolean countStar; // isAgg 且 COUNT(*)
         public final FieldType argType; // isAgg 且 !countStar：参数列类型（决定 SUM 整型/浮点）
+        public final String argName;    // isAgg 且 !countStar：参数列的显示名（仅用于报错）
 
-        public Item(boolean isAgg, int groupPos, String func, int argIdx, boolean countStar, FieldType argType) {
+        public Item(boolean isAgg, int groupPos, String func, int argIdx, boolean countStar,
+                    FieldType argType, String argName) {
             this.isAgg = isAgg;
             this.groupPos = groupPos;
             this.func = func;
             this.argIdx = argIdx;
             this.countStar = countStar;
             this.argType = argType;
+            this.argName = argName;
         }
     }
 
@@ -108,16 +112,30 @@ public class Aggregate extends Operator {
         Object v = r.get(it.argIdx);
         if (v == null) return;                    // 聚合忽略 NULL
         a.any = true;
-        Number n = (Number) v;
         switch (it.func) {
+            // sum/avg 只对数值有定义，强转必须留在【这两个分支内部】：
+            // 原先写在 switch 之前，于是 max(name) 这种完全合法的查询会抛未包装的
+            // ClassCastException —— 那是 RuntimeException，会越过 ConnectionHandler
+            // 的 catch(Error) 掐断连接，用户只看到一段堆栈。
             case "sum":
-                if (integral(it.argType)) a.lsum += n.longValue();
-                else a.dsum += n.doubleValue();
+            case "avg": {
+                if (!(v instanceof Number)) {
+                    throw new Error(ErrorCode.SE_AGGREGATE_ARG_TYPE,
+                            "聚合函数 " + it.func + " 的参数必须是数值类型，实际是 "
+                                    + it.argType.sqlName() + "（列 "
+                                    + (it.argName == null ? "?" : it.argName) + "）");
+                }
+                Number n = (Number) v;
+                if (it.func.equals("sum")) {
+                    if (integral(it.argType)) a.lsum += n.longValue();
+                    else a.dsum += n.doubleValue();
+                } else {
+                    a.dsum += n.doubleValue();
+                    a.count++;
+                }
                 break;
-            case "avg":
-                a.dsum += n.doubleValue();
-                a.count++;
-                break;
+            }
+            // min/max 走 Compare.compare，字符串、日期、布尔都能比 —— 不需要数值
             case "min":
                 if (a.min == null || Compare.compare(v, a.min) < 0) a.min = v;
                 break;
@@ -125,7 +143,8 @@ public class Aggregate extends Operator {
                 if (a.max == null || Compare.compare(v, a.max) > 0) a.max = v;
                 break;
             default:
-                throw new Error("EX-0002", "unknown aggregate: " + it.func);
+                throw new Error(ErrorCode.SE_UNKNOWN_AGGREGATE,
+                        "未知的聚合函数: " + it.func + "（可用: count, sum, avg, min, max）");
         }
     }
 
@@ -140,7 +159,8 @@ public class Aggregate extends Operator {
                 return Double.valueOf(a.dsum / a.count);
             case "min": return a.min;
             case "max": return a.max;
-            default: throw new Error("EX-0002", "unknown aggregate: " + it.func);
+            default: throw new Error(ErrorCode.SE_UNKNOWN_AGGREGATE,
+                    "未知的聚合函数: " + it.func + "（可用: count, sum, avg, min, max）");
         }
     }
 

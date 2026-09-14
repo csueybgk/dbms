@@ -1,6 +1,7 @@
 package com.course.dbms.server;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.common.Log;
 import com.course.dbms.compiler.Tracer;
 import com.course.dbms.db.Database;
@@ -16,6 +17,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
@@ -69,11 +72,29 @@ public class ConnectionHandler implements Runnable {
                 } catch (Error e) {
                     Log.warn("[client " + s.getRemoteSocketAddress() + "] " + e.toString());
                     Packager.write(out, new Package(true, Encoder.encodeError(e)));
+                } catch (RuntimeException e) {
+                    // 兜底：任何没有包装成 Error 的运行时异常（例如某处未预期的类型强转）
+                    // 过去会一路穿出本方法、掐断连接，客户端只看到 EOFException 堆栈。
+                    // 现在服务端把完整堆栈记进日志供排查，客户端收到一句 SV-0001，
+                    // 连接保持可用 —— "所有错误都有回复"的最后一道网兜。
+                    Log.error("[client " + s.getRemoteSocketAddress() + "] 内部错误: " + e);
+                    Log.error(stackOf(e));
+                    Packager.write(out, new Package(true, Encoder.encodeError(
+                            new Error(ErrorCode.SV_INTERNAL,
+                                    "服务端内部错误: " + e.getClass().getSimpleName()
+                                            + "（已记入服务端日志；连接未中断，可以继续执行别的语句）", e))));
                 }
             }
             Log.info("[client " + s.getRemoteSocketAddress() + "] disconnected");
         } catch (IOException e) {
             Log.error("[conn] " + e.getMessage());
         }
+    }
+
+    /** 异常堆栈转字符串，交给日志（Log 只收消息字符串）。 */
+    private static String stackOf(Throwable t) {
+        StringWriter sw = new StringWriter();
+        t.printStackTrace(new PrintWriter(sw));
+        return sw.toString();
     }
 }

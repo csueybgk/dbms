@@ -1,5 +1,7 @@
 package com.course.dbms.engine.table;
 
+import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.Parser;
 import com.course.dbms.compiler.ast.Cond;
 
@@ -33,12 +35,13 @@ public class Constraint implements Serializable {
         Kind(String sql) { this.sql = sql; }
         public String sql() { return sql; }
 
-        /** 反查（从 sys_constraints 读回时用）；未知抛 CT-0002。 */
+        /** 反查（从 sys_constraints 读回时用）；未知抛 CT-0003。 */
         public static Kind fromSql(String s) {
             for (Kind k : values()) {
                 if (k.sql.equalsIgnoreCase(s)) return k;
             }
-            throw new com.course.dbms.common.Error("CT-0002", "unknown constraint kind: " + s);
+            throw new Error(ErrorCode.CT_UNKNOWN_CONSTRAINT_KIND,
+                    "unknown constraint kind: " + s + "（约束类型无法识别：系统表里存的值不是本版本认识的值）");
         }
     }
 

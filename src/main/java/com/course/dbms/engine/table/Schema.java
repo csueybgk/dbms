@@ -1,6 +1,7 @@
 package com.course.dbms.engine.table;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -53,8 +54,26 @@ public class Schema implements Serializable {
 
     public FieldType typeOf(String name) {
         int i = indexOf(name);
-        if (i < 0) throw new Error("SE-0001", "column not found: " + name);
+        if (i < 0) {
+            throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                    "列不存在: " + name + "（该表列为 " + columnNames() + "）");
+        }
         return columns.get(i).type();
+    }
+
+    /**
+     * 列名清单，用于"列不存在"类报错里给出候选。
+     * 超过 10 列只列前 10 个再加省略号，避免宽表把错误刷屏。
+     */
+    public String columnNames() {
+        StringBuilder sb = new StringBuilder();
+        int show = Math.min(columns.size(), 10);
+        for (int i = 0; i < show; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(columns.get(i).name());
+        }
+        if (columns.size() > show) sb.append(", …（共 ").append(columns.size()).append(" 列）");
+        return sb.toString();
     }
 
     @Override public String toString() {

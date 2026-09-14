@@ -2,6 +2,7 @@ package com.course.dbms.storage;
 
 import com.course.dbms.common.Consts;
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -56,7 +57,9 @@ public class Log {
             writeRecord(TYPE_COMMIT, txnId, 0, 0, null);
             sync();
         } catch (IOException e) {
-            throw new Error("ST-0015", "wal append failed for txn " + txnId, e);
+            throw new Error(ErrorCode.ST_WAL_APPEND,
+                    "wal append failed for txn " + txnId
+                            + "（WAL 追加失败：该事务的提交日志没能落盘，提交未生效）", e);
         }
     }
 
@@ -96,7 +99,7 @@ public class Log {
         } catch (EOFException e) {
             // 到文件尾自然结束
         } catch (IOException e) {
-            throw new Error("ST-0016", "wal parse failed", e);
+            throw new Error(ErrorCode.ST_WAL_PARSE, "wal parse failed（WAL 解析失败：崩溃恢复无法重放已提交事务）", e);
         }
 
         for (PutRec p : puts) {
@@ -132,7 +135,11 @@ public class Log {
     private RandomAccessFile raf() throws IOException {
         if (raf == null) {
             if (file.getParentFile() != null && !file.getParentFile().exists()) {
-                if (!file.getParentFile().mkdirs()) throw Error.st("cannot create wal dir: " + file.getParentFile());
+                if (!file.getParentFile().mkdirs()) {
+                    throw new Error(ErrorCode.ST_CREATE_WAL_DIR,
+                            "cannot create wal dir: " + file.getParentFile()
+                                    + "（创建 WAL 目录失败：数据库目录不可写）");
+                }
             }
             raf = new RandomAccessFile(file, "rw");
         }
@@ -148,7 +155,7 @@ public class Log {
             f.close();
             return all;
         } catch (IOException e) {
-            throw new Error("ST-0017", "read wal failed", e);
+            throw new Error(ErrorCode.ST_WAL_READ, "read wal failed（读取 WAL 失败：日志文件不可读）", e);
         }
     }
 
@@ -158,7 +165,8 @@ public class Log {
             f.setLength(0);
             f.getFD().sync();
         } catch (IOException e) {
-            throw new Error("ST-0018", "truncate wal failed", e);
+            throw new Error(ErrorCode.ST_WAL_TRUNCATE,
+                    "truncate wal failed（清空 WAL 失败：日志文件不可写）", e);
         }
     }
 

@@ -1,6 +1,8 @@
 package com.course.dbms.storage;
 
 import com.course.dbms.common.Consts;
+import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.util.Arrays;
 
@@ -59,7 +61,9 @@ public class Page {
     /** 从磁盘字节反序列化构造。header 里存有 tableId/pageNo。 */
     public Page(byte[] data) {
         if (data.length != SIZE) {
-            throw new IllegalArgumentException("page size mismatch: " + data.length);
+            throw new Error(ErrorCode.ST_PAGE_SIZE_MISMATCH_READ,
+                    "page size mismatch on read: expected " + SIZE + ", got " + data.length
+                            + "（读到的页长度不是标准页大小：数据库文件可能已损坏）");
         }
         this.data = data;
         this.tableId = getInt(OFF_TABLE_ID);

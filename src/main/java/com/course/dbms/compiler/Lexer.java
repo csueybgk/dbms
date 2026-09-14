@@ -1,6 +1,7 @@
 package com.course.dbms.compiler;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.token.Token;
 import com.course.dbms.compiler.token.TokenType;
 
@@ -151,6 +152,6 @@ public class Lexer {
     /** 词法错误：错误类型 + 原因 + 行号列号定位（指导书要求）。 */
     private Error err(int pos, String msg) {
         int[] lc = lineCol(pos);
-        return new Error("LX-0001", msg + " at line " + lc[0] + ", column " + lc[1]);
+        return new Error(ErrorCode.LX_LEX, msg + " at line " + lc[0] + ", column " + lc[1]);
     }
 }

@@ -1,6 +1,7 @@
 package com.course.dbms.storage;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.txn.Txn;
 
 import java.util.Arrays;
@@ -92,7 +93,9 @@ public class PageManager {
     public void freeLastPage(int tableId) {
         Txn t = Txn.current();
         if (t != null && t.active()) {
-            throw new Error("TX-0004", "freeLastPage cannot run inside a transaction");
+            throw new Error(ErrorCode.TX_FREE_PAGE_IN_TXN,
+                    "freeLastPage cannot run inside a transaction"
+                            + "（事务内不能回收表尾页：回滚会无法还原被释放的页）");
         }
         int last = disk.pageCount(tableId) - 1;
         if (last < 0) return;

@@ -72,7 +72,7 @@ begin;  commit;  rollback;                  -- 事务控制：每条语句默认
 
 ```bash
 cd dbms
-mvn test                # 运行全部测试（共 232 个用例）
+mvn test                # 运行全部测试（共 238 个用例）
 mvn package             # 打包出 target/dbms-1.0.0.jar
 ```
 
@@ -144,7 +144,7 @@ dbms/
     │   ├── protocol/       Package / Packager / Encoder / Decoder —— 客户端/服务端分帧协议
     │   ├── server/         Server / ConnectionHandler / ServerLauncher
     │   └── client/         ClientLauncher / Shell / Renderer
-    └── test/java/com/course/dbms/    —— 分模块单元/集成/端到端测试（232 个用例）
+    └── test/java/com/course/dbms/    —— 分模块单元/集成/端到端测试（238 个用例）
 ```
 
 ---
@@ -219,7 +219,7 @@ select <列 | 聚合(列)>, ... from t1 [AS a]
 ```
 
 - **JOIN**：`op/Join` 算子对左行 × 右行做嵌套循环，满足 `ON a.col=b.col` 则拼接成一行（左列在前、右列在后）。列-列比较由扩展后的 `Cond`（新增 `column2/qualifier2`）+ `CondEval` 统一求值。无 `ON` 即笛卡尔积；`LEFT JOIN` 在右表无匹配时仍保留左侧行（右侧列置 `NULL`）。
-- **表别名 / 限定列**：`FROM t a` 后可用 `a.col`；`CombinedSchema` 记录每列所属的限定名（别名或表名），`resolve` 解析限定名或裸名（裸名须全局唯一，否则报歧义 `SE-0004`）。
+- **表别名 / 限定列**：`FROM t a` 后可用 `a.col`；`CombinedSchema` 记录每列所属的限定名（别名或表名），`resolve` 解析限定名或裸名（裸名须全局唯一，否则报歧义 `SE-0017`）。
 - **聚合 / GROUP BY**：`op/Aggregate` 按分组键分组，每组产出一行；`COUNT→Long`、`SUM→Long/整型或 Double/浮点`、`AVG→Double`、`MIN/MAX→原值`。有聚合时非聚合列必须出现在 GROUP BY（否则 `SE-0006`）；`ORDER BY` 可用分组键、输出别名或聚合名（`order by count(*)`）。
 - **管线**：`SeqScan(t0) → [Join ×N] → [Filter(WHERE)] → [Aggregate | Project] → [Sort(ORDER BY)]`；纯单表无特性查询走原有 `SeqScan→Filter→Sort→Project` 路径（`isRich()` 区分），既有的三模块行为与测试零改动。
 
@@ -301,8 +301,8 @@ dbms> commit;            -- 先写 WAL 再落页；此刻 kill 掉服务端，�
 dbms> create table t (id int32 primary key, name string not null, age int32 default 18,
                       email string unique, score int32 check (score >= 0));
 dbms> insert into t (id, name) values (1, 'alice');   -- age=18（DEFAULT），email/score 为 NULL
-dbms> insert into t (id) values (2);                  -- ✗ SE-0010：name 不能为 NULL
-dbms> insert into t (id, name) values (1, 'bob');     -- ✗ SE-0011：主键重复
+dbms> insert into t (id) values (2);                  -- ✗ [SE-0010] 列不能为 NULL: name（表 t 的 not null）
+dbms> insert into t (id, name) values (1, 'bob');     -- ✗ [SE-0011] 违反唯一性约束 primary key (id): 已存在相同的值 [1]（表 t）
 dbms> show table t;                                   -- 多出第三列 constraint
 ```
 
@@ -321,7 +321,7 @@ dbms> show table t;                                   -- 多出第三列 constra
 ### 三处关键设计
 
 - **权威检查点在写入算子**（`Insert` / `Mutate` 写盘之前），不在 Analyzer。唯一性/非空性依赖表中的实际数据，只有持数据的一方能判定；`Analyzer` 只做"看 AST 就能判定"的静态检查（列存在、DEFAULT 与列类型相容、约束名不重复）。这与项目一贯原则一致：**预检是为了快速失败和友好报错，正确性由唯一的权威写入点保证**。
-- **DEFAULT 的字面量存原文、解析成对应 Java 类型**，不走 `StorageEngine.cast` —— 那个会把 `default 1.5` 给 int32 时**静默截断成 1**；`FieldType.parseLiteral` 遇到形状不符直接报 `SE-0005`。
+- **DEFAULT 的字面量存原文、解析成对应 Java 类型**，不走 `StorageEngine.cast` —— 那个会把 `default 1.5` 给 int32 时**静默截断成 1**；`FieldType.parseLiteral` 遇到形状不符直接报 `SE-0026`（`DEFAULT` 值与列类型不匹配）。
 - **CHECK 表达式存 SQL 文本**（`Cond.toSql()` 而不是 `toString()`）：后者对字符串字面量不加引号，`check (name <> 'alice')` 会渲染成 `name <> alice`，重新解析时走成"列 vs 列"，**静默变成另一个条件**。落盘的同时要能原样解析回来，所以加了 `Cond.toSql()` + `Parser.parseCondition(String)`。
 
 ### NULL 支持（NOT NULL 的前提）
@@ -342,7 +342,13 @@ dbms> show table t;                                   -- 多出第三列 constra
 
 ## 十一、测试
 
-`mvn test` 全绿，共 **232 个用例**，按模块覆盖：
+`mvn test` 全绿，共 **238 个用例**，按模块覆盖：
+
+### 通用（common）
+
+| 测试类 | 数量 | 覆盖 |
+|--------|-----|------|
+| `common/ErrorCodeTest` | 5 | **错误码不变量**：码唯一且格式统一、每个码都在源码里被引用（无死码）、源码里不再出现裸的码字符串（防「一码多义」回潮）、手册「附录 A」与枚举一一对应 |
 
 ### 存储系统（②）
 
@@ -366,7 +372,7 @@ dbms> show table t;                                   -- 多出第三列 constra
 |--------|-----|------|
 | `compiler/ParserTest` | 18 | 四类语句解析、分号容错、语法错误、未知类型、JOIN/聚合/GROUP BY、CREATE INDEX / SHOW INDEXES |
 | `compiler/ConstraintParseTest` | 24 | **约束文法**：列级/表级约束、命名约束、复合 PK/UNIQUE、`NULL` 字面量、INSERT 列清单、期望符号集、外键的定向报错 |
-| `compiler/AnalyzerTest` | 28 | 存在性 / 类型 / 列数 / 列名重复、JOIN 限定/歧义、聚合分组规则、索引列与索引名（SE-0004/SE-0007）、**约束名重复/多主键/DEFAULT 形状/未知约束列**（SE-0015/SE-0016/SE-0005/SE-0004） |
+| `compiler/AnalyzerTest` | 29 | 存在性 / 类型 / 列数 / 列名重复、JOIN 限定/歧义、聚合分组规则、索引列与索引名（SE-0004/SE-0007）、**约束名重复/多主键/DEFAULT 形状/未知约束列**（SE-0015/SE-0016/SE-0026/SE-0004） |
 | `compiler/PlanBuilderTest` | 19 | 计划树形状、JOIN 左链、Aggregate/Sort 根、**索引选择**（有索引→IndexScan、OR/<>/无索引→SeqScan、区间端点） |
 | `compiler/TracerTest` | 11 | 四阶段编译 trace：Token 流 / AST / 语义 / 计划，语法错误的期望符号集，`null` 字面量与约束进入 trace |
 | `db/DatabaseTest` | 5 | 全链路 create/insert/select/show、where 与 or、重开恢复、错误传播 |
@@ -413,7 +419,7 @@ UPDATE users SET age = 25, name = '张三' WHERE id = 1;
 
 两类语句返回 `affected` 行数，不带 `WHERE` 时作用于全表。条件复用 SELECT 的比较及 AND/OR 规则，支持表名限定列和列间比较。SET 支持多个列的字面量赋值，拒绝重复列、未知列和无法转换的类型；暂不支持算术表达式或列引用赋值。
 
-修改接入 Session 表级写锁、影子页事务和 WAL，支持 BEGIN / COMMIT / ROLLBACK。更新前检查所有目标行的长度，单行超过一页会报 `SE-0009: record too large for page`。变长行可迁移到新页；删除压缩页内记录区并保留其余行的槽位编号，空槽位可复用。页内空间可回收，文件不会自动缩小。
+修改接入 Session 表级写锁、影子页事务和 WAL，支持 BEGIN / COMMIT / ROLLBACK。更新前检查所有目标行的长度，单行超过一页会报 `✗ [SE-0009] record too large for page（记录超过单页容量，一行的数据装不进 4KB 的页）`。变长行可迁移到新页；删除压缩页内记录区并保留其余行的槽位编号，空槽位可复用。页内空间可回收，文件不会自动缩小。
 
 索引沿用现有派生数据设计，每次 DELETE / UPDATE 后重建目标表索引（成本随表大小增长）；回滚和重启仍由目录重载恢复。自动提交沿用现有直接写页机制，若需要多页修改的崩溃原子性，请使用显式事务。
 

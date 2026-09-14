@@ -1,6 +1,7 @@
 package com.course.dbms.txn;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -60,14 +61,17 @@ public class LockManager {
                 long remain = deadline - System.currentTimeMillis();
                 if (remain <= 0) {
                     g.waiters.remove(mine);
-                    throw new Error("TX-0003", "lock timeout on table " + table + " want " + mode);
+                    throw new Error(ErrorCode.TX_LOCK_TIMEOUT,
+                            "lock timeout on table " + table + " want " + mode
+                                    + "（等待表锁超时：另有事务长期持有该表，或自己前面还有等待者）");
                 }
                 wait(remain);
             }
         } catch (InterruptedException e) {
             g.waiters.remove(mine);
             Thread.currentThread().interrupt();
-            throw new Error("TX-0003", "lock interrupted on table " + table, e);
+            throw new Error(ErrorCode.TX_LOCK_INTERRUPTED,
+                    "lock interrupted on table " + table + "（等锁的线程被中断：连接可能已断开）", e);
         }
     }
 

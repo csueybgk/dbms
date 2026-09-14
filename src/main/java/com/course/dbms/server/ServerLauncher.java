@@ -1,6 +1,8 @@
 package com.course.dbms.server;
 
 import com.course.dbms.common.Consts;
+import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.common.Log;
 import com.course.dbms.db.Database;
 
@@ -17,7 +19,7 @@ public class ServerLauncher {
     public static void main(String[] args) throws Exception {
         String cmd = args.length > 0 ? args[0] : "open";
         String dir = args.length > 1 ? args[1] : "data/db";
-        int port = args.length > 2 ? Integer.parseInt(args[2]) : Consts.DEFAULT_PORT;
+        int port = args.length > 2 ? parsePort(args[2]) : Consts.DEFAULT_PORT;
 
         if (cmd.equalsIgnoreCase("create")) {
             wipe(dir);
@@ -32,6 +34,24 @@ public class ServerLauncher {
 
         // 主线程挂起，等待外部终止
         Thread.currentThread().join();
+    }
+
+    /** 端口必须是 1..65535 的整数；写错了要说清"实际给了什么"。 */
+    private static int parsePort(String s) {
+        int p;
+        try {
+            p = Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            throw new Error(ErrorCode.SV_BAD_ARGUMENT,
+                    "服务端启动参数错误: 端口必须是数字，实际是 \"" + s + "\""
+                            + "（用法: server <create|open> <数据库目录> [端口]）");
+        }
+        if (p < 1 || p > 65535) {
+            throw new Error(ErrorCode.SV_BAD_ARGUMENT,
+                    "服务端启动参数错误: 端口必须落在 1..65535，实际是 " + p
+                            + "（用法: server <create|open> <数据库目录> [端口]）");
+        }
+        return p;
     }
 
     private static void wipe(String dir) {

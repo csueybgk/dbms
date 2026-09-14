@@ -1,6 +1,7 @@
 package com.course.dbms.compiler;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.ast.ColRef;
 import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
@@ -32,23 +33,29 @@ import java.util.Set;
  * 语义分析器：以 AST + 系统目录为依据，做静态校验（不落地、不改数据）。
  * 对应图片"① SQL编译器 - 语义分析：存在性 / 类型 / 列数检查"。
  *
- * 检查项（错误码以 SE- 开头）：
- *   - CREATE：列名不可重复、至少一列；约束名不重复（SE-0015）、至多一个 PRIMARY KEY（SE-0016）、
- *             约束引用的列存在（SE-0004）、DEFAULT 与列类型相容（SE-0005）、
- *             CHECK 的列存在且字面量可 cast；表名唯一由 Catalog 在落地时校验。
- *   - CREATE INDEX：表存在、列存在（SE-0004）、索引名未被占用（SE-0007）。
- *   - INSERT：表存在（TB-0001）；列清单里的列存在（SE-0013）/不重复（SE-0014）；
- *             值的个数与列数（或列清单）一致（SE-0003）；每个值可被 cast 到对应列类型（SE-0005）。
+ * 检查项（错误码以 SE- 开头，每个码只有一种含义，详见 {@link ErrorCode}）：
+ *   - CREATE：至少一列（SE-0001）、列名不重复（SE-0002）；约束名不重复（SE-0015）、
+ *             至多一个 PRIMARY KEY（SE-0016）、约束引用的列存在（SE-0004）、
+ *             DEFAULT 与列类型相容（SE-0026）、NOT NULL 列的默认值不为 NULL（SE-0027）、
+ *             CHECK 的列存在且字面量可 cast；表名唯一由 Catalog 在落地时校验（CT-0002）。
+ *   - CREATE INDEX：表存在（TB-0001）、列存在（SE-0004）、索引名未被占用（SE-0007）。
+ *   - INSERT：表存在（TB-0001）；列清单里的列存在（SE-0004）/不重复（SE-0014）；
+ *             值的个数与列数（SE-0003）或列清单个数（SE-0029）一致；每个值可被 cast 到对应列类型（SE-0005）。
  *
  * 【边界】这里只做"看 AST 就能判定"的静态检查。NOT NULL / UNIQUE / CHECK 是否真的成立
  * 依赖表中的实际数据，由权威写入点 {@link com.course.dbms.engine.table.ConstraintChecker}
  * 在 Insert / Mutate 算子写盘前判定 —— 预检是为了快速失败和友好报错，不是为了正确性。
- *   - SELECT：表存在；SELECT 列、WHERE 列、ORDER BY 列都必须存在于表结构中。
+ *   - SELECT：表存在；SELECT 列与 WHERE 列必须存在（SE-0004）、ORDER BY 列必须存在（SE-0020）、
+ *             分组查询的排序键必须是输出列（SE-0030）、非聚合列必须在 GROUP BY 里（SE-0006）。
  *   - SHOW：show table <x> 时该表必须存在。
  *
  * 校验通过后即返回，无副作用；Page 级执行引擎在 execute 时直接从 Catalog 取表。
  */
 public class Analyzer {
+
+    /** 支持的聚合函数名（小写）。校验与报错提示共用同一份清单，避免两处漂移。 */
+    static final List<String> AGG_FUNCS =
+            java.util.Collections.unmodifiableList(java.util.Arrays.asList("count", "sum", "avg", "min", "max"));
 
     private final Catalog catalog;
 
@@ -70,17 +77,19 @@ public class Analyzer {
         else if (stmt instanceof SelectStmt) analyzeSelect((SelectStmt) stmt);
         else if (stmt instanceof ShowStmt) analyzeShow((ShowStmt) stmt);
         else if (stmt instanceof TxnStmt) { /* 事务控制语句由 Session 拦截，无静态校验 */ }
-        else throw new Error("SE-0000", "unknown statement: " + stmt);
+        else throw new Error(ErrorCode.SE_UNKNOWN_STATEMENT, "未知的语句类型: " + stmt.getClass().getSimpleName());
     }
 
     private void analyzeCreate(CreateStmt c) {
         if (c.columns.isEmpty()) {
-            throw new Error("SE-0001", "表至少需要一列");
+            throw new Error(ErrorCode.SE_TABLE_NEEDS_COLUMN,
+                    "表至少需要一列: " + c.tableName + " 的列定义为空");
         }
         Set<String> seen = new HashSet<>();
         for (Column col : c.columns) {
             if (!seen.add(col.name().toLowerCase())) {
-                throw new Error("SE-0002", "列名重复: " + col.name());
+                throw new Error(ErrorCode.SE_DUPLICATE_COLUMN,
+                        "列名重复: " + col.name() + "（表 " + c.tableName + " 里出现了两次）");
             }
         }
         // 表还没落地，先按列定义拼一个临时 Schema 来校验约束
@@ -95,15 +104,21 @@ public class Analyzer {
         boolean hasPrimaryKey = false;
         for (Constraint con : cons) {
             if (!con.name().isEmpty() && !names.add(con.name().toLowerCase())) {
-                throw new Error("SE-0015", "约束名重复: " + con.name());
+                throw new Error(ErrorCode.SE_CONSTRAINT_NAME_DUPLICATE,
+                        "约束名重复: " + con.name() + "（表 " + tableName + " 里出现了两次）");
             }
             if (con.kind() == Constraint.Kind.PRIMARY_KEY) {
-                if (hasPrimaryKey) throw new Error("SE-0016", "一张表只能有一个 PRIMARY KEY");
+                if (hasPrimaryKey) {
+                    throw new Error(ErrorCode.SE_MULTIPLE_PRIMARY_KEY,
+                            "一张表只能有一个 PRIMARY KEY: " + tableName + " 定义了多个");
+                }
                 hasPrimaryKey = true;
             }
             for (String col : con.columns()) {
                 if (schema.indexOf(col) < 0) {
-                    throw new Error("SE-0004", "约束引用的列不存在: " + col + "（表 " + tableName + "）");
+                    throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                            "约束引用的列不存在: " + col + "（表 " + tableName + " 是新建的，该表列为 "
+                                    + schema.columnNames() + "）");
                 }
             }
             switch (con.kind()) {
@@ -112,7 +127,8 @@ public class Analyzer {
                     // parseLiteral 而不是 cast：cast 会把 1.5 静默截断成 1，1.5 这种默认值必须报错
                     Object v = schema.column(schema.indexOf(col)).type().parseLiteral(con.detail());
                     if (v == null && notNullColumns(schema, cons).contains(col.toLowerCase())) {
-                        throw new Error("SE-0005", "列 " + col + " 是 NOT NULL，默认值不能为 NULL");
+                        throw new Error(ErrorCode.SE_DEFAULT_NULL_ON_NOT_NULL,
+                                "列 " + col + " 是 NOT NULL，默认值不能为 NULL（表 " + tableName + "）");
                     }
                     break;
                 }
@@ -146,10 +162,13 @@ public class Analyzer {
     private void analyzeCreateIndex(CreateIndexStmt c) {
         Table table = catalog.getTable(c.tableName);             // TB-0001 if missing
         if (table.schema().indexOf(c.columnName) < 0) {
-            throw new Error("SE-0004", "列不存在: " + c.columnName + "（表 " + table.name() + "）");
+            throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                    "索引的列不存在: " + c.columnName + "（表 " + table.name() + "；该表列为 "
+                            + table.schema().columnNames() + "）");
         }
         if (catalog.hasIndex(c.indexName)) {
-            throw new Error("SE-0007", "索引名已存在: " + c.indexName);
+            throw new Error(ErrorCode.SE_INDEX_EXISTS,
+                    "索引名已存在: " + c.indexName + "（表 " + table.name() + "）");
         }
     }
 
@@ -157,7 +176,7 @@ public class Analyzer {
         Table table = catalog.getTable(ins.tableName);       // TB-0001 if missing
         // 与 PlanBuilder 共用同一套解析：列清单解析、DEFAULT/NULL 补全、逐个 cast。
         // 这样"预检报的错"和"落地会报的错"不会对不上。
-        ConstraintChecker.resolveInsert(table.schema(), ins.columns, ins.values);
+        ConstraintChecker.resolveInsert(table.name(), table.schema(), ins.columns, ins.values);
     }
 
     private void analyzeMutation(String name, Cond where, java.util.Map<String, Object> assignments) {
@@ -175,12 +194,11 @@ public class Analyzer {
         if (sel.isRich()) { analyzeSelectRich(sel); return; }
         // 原有单表路径
         Table table = catalog.getTable(sel.tableName);
-        Schema schema = table.schema();
         if (!sel.all) {
             for (String col : sel.columns) requireColumn(table, col);
         }
         if (sel.where != null) checkCond(table, sel.where);
-        if (sel.orderBy != null) requireColumn(table, sel.orderBy);
+        if (sel.orderBy != null) requireOrderColumn(table, sel.orderBy);
     }
 
     /** 多表联查 / 聚合 / 别名 / 限定列的语义校验。 */
@@ -192,7 +210,8 @@ public class Analyzer {
             Table t = catalog.getTable(tr.name);          // TB-0001 if missing
             tables.add(t);
             if (!eff.add(tr.effective().toLowerCase())) {
-                throw new Error("SE-0004", "表/别名重复: " + tr.effective());
+                throw new Error(ErrorCode.SE_DUPLICATE_TABLE_ALIAS,
+                        "表名或别名重复: " + tr.effective() + "（同一个 FROM 子句里出现了两次）");
             }
         }
         // 逐表接入 CombinedSchema，并对每个 JOIN 的 ON 校验（只能引用到此为止的表）
@@ -213,7 +232,10 @@ public class Analyzer {
             for (SelectItem it : sel.items) {
                 if (it.isAgg()) {
                     if (it.arg != null) resolveCol(cs, it.arg);   // COUNT(*) 无参数列
-                    if (!isAggFunc(it.func)) throw new Error("SE-0004", "unknown aggregate: " + it.func);
+                    if (!isAggFunc(it.func)) {
+                        throw new Error(ErrorCode.SE_UNKNOWN_AGGREGATE,
+                                "未知的聚合函数: " + it.func + "（可用: " + String.join(", ", AGG_FUNCS) + "）");
+                    }
                 } else {
                     resolveCol(cs, it.col);
                 }
@@ -228,10 +250,14 @@ public class Analyzer {
             // 分组/聚合查询里，排序键只能是输出列（分组键或聚合别名/函数名）；否则可为源列
             if (grouped) {
                 if (aggOrderIndex(sel.items, sel.orderBy) < 0) {
-                    throw new Error("SE-0004", "ORDER BY 列不存在: " + sel.orderBy);
+                    // 分组查询里排序键必须是输出列——和"列不存在"是两回事，修复动作也不同
+                    throw new Error(ErrorCode.SE_ORDER_BY_NOT_OUTPUT,
+                            "ORDER BY 的列必须是输出列: " + sel.orderBy
+                                    + "（分组或带聚合的查询里，排序键只能是分组键或聚合结果）");
                 }
             } else if (!isOrderResolvable(cs, sel.items, sel.orderBy)) {
-                throw new Error("SE-0004", "ORDER BY 列不存在: " + sel.orderBy);
+                throw new Error(ErrorCode.SE_ORDER_BY_COLUMN_NOT_FOUND,
+                        "ORDER BY 列不存在: " + sel.orderBy + "（" + cs.columnNames() + "）");
             }
         }
         // 分组规则：有分组/聚合时，非聚合列必须出现在 GROUP BY 中
@@ -239,7 +265,9 @@ public class Analyzer {
             for (SelectItem it : sel.items) {
                 if (it.isAgg()) continue;
                 if (!inGroupBy(sel.groupBy, it.col)) {
-                    throw new Error("SE-0006", "非聚合列 " + it.col.display() + " 必须在 GROUP BY 中");
+                    throw new Error(ErrorCode.SE_GROUP_BY_MISSING,
+                            "非聚合列未出现在 GROUP BY: " + it.col.display()
+                                    + "（有聚合或分组时，其余列必须都写进 GROUP BY）");
                 }
             }
         }
@@ -311,8 +339,7 @@ public class Analyzer {
     }
 
     private boolean isAggFunc(String lower) {
-        return lower.equals("count") || lower.equals("sum") || lower.equals("avg")
-                || lower.equals("min") || lower.equals("max");
+        return AGG_FUNCS.contains(lower);
     }
 
     private void analyzeShow(ShowStmt s) {
@@ -336,7 +363,22 @@ public class Analyzer {
 
     private void requireColumn(Table table, String col) {
         if (table.schema().indexOf(col) < 0) {
-            throw new Error("SE-0004", "列不存在: " + col + "（表 " + table.name() + "）");
+            throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                    "列不存在: " + col + "（表 " + table.name() + "；该表列为 "
+                            + table.schema().columnNames() + "）");
+        }
+    }
+
+    /**
+     * ORDER BY 的列检查。与 {@link #requireColumn} 分开，是因为错误码不同：
+     * ORDER BY 写错列名要报 SE-0020，而 SELECT/WHERE 里写错报 SE-0004。
+     * 两者归到同一个码，用户就没法从码上区分该改哪里。
+     */
+    private void requireOrderColumn(Table table, String col) {
+        if (table.schema().indexOf(col) < 0) {
+            throw new Error(ErrorCode.SE_ORDER_BY_COLUMN_NOT_FOUND,
+                    "ORDER BY 列不存在: " + col + "（表 " + table.name() + "；该表列为 "
+                            + table.schema().columnNames() + "）");
         }
     }
 }

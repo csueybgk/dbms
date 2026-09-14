@@ -1,6 +1,7 @@
 package com.course.dbms.engine.storage;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.engine.table.FieldType;
 import com.course.dbms.engine.table.Row;
 import com.course.dbms.engine.table.Schema;
@@ -55,17 +56,22 @@ public class StorageEngine {
                     if (v instanceof Boolean) return v;
                     return Boolean.parseBoolean(String.valueOf(v));
                 case STRING:  return String.valueOf(v);
-                default:      throw new Error("SE-0004", "unsupported type " + type);
+                default:      throw new Error(ErrorCode.SE_UNSUPPORTED_TYPE,
+                        "不支持的字段类型: " + type + "（可用类型: " + FieldType.typeNames() + "）");
             }
         } catch (ClassCastException | NumberFormatException e) {
-            throw new Error("SE-0005", "插入值类型与列 " + schema.column(colIndex).name() + " 不匹配", e);
+            throw new Error(ErrorCode.SE_INSERT_TYPE_MISMATCH,
+                    "插入值类型与列不匹配：列 " + schema.column(colIndex).name()
+                            + " 是 " + schema.column(colIndex).type().sqlName() + "，给了 " + v, e);
         }
     }
 
     /** 把一行序列化成字节数组。 */
     public byte[] rowToBytes(Schema schema, Row row) {
         if (row.size() != schema.columnCount()) {
-            throw new Error("SE-0006", "行值个数与列数不一致: " + row.size() + "!=" + schema.columnCount());
+            throw new Error(ErrorCode.SE_ROW_WIDTH_MISMATCH,
+                    "内部错误：行宽与列数不一致（行 " + row.size() + " 个值，表 "
+                            + schema.columnCount() + " 列）");
         }
         try {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -83,7 +89,7 @@ public class StorageEngine {
             out.flush();
             return bos.toByteArray();
         } catch (IOException e) {
-            throw new Error("SE-0007", "serialize row failed", e);
+            throw new Error(ErrorCode.SE_SERIALIZE_ROW, "serialize row failed（行数据序列化失败）", e);
         }
     }
 
@@ -104,7 +110,8 @@ public class StorageEngine {
             }
             return new Row(values);
         } catch (IOException e) {
-            throw new Error("SE-0008", "deserialize row failed", e);
+            throw new Error(ErrorCode.SE_DESERIALIZE_ROW,
+                    "deserialize row failed（行数据反序列化失败：数据文件可能已损坏）", e);
         }
     }
 
@@ -134,7 +141,8 @@ public class StorageEngine {
     /** 单行不得超过一页，写入前检查以免出现无效 RID。 */
     public void validateRecord(byte[] record) {
         if (record.length > Page.SIZE - Page.HEADER_SIZE - Page.SLOT_SIZE)
-            throw new Error("SE-0009", "record too large for page");
+            throw new Error(ErrorCode.SE_RECORD_TOO_LARGE,
+                    "record too large for page（记录超过单页容量，一行的数据装不进 4KB 的页）");
     }
 
     public void delete(Table table, Located row) {

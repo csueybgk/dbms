@@ -2,36 +2,42 @@ package com.course.dbms.common;
 
 /**
  * 统一错误。带错误码，方便客户端/用户定位问题。
- * 错误码形如 "TB-0001"，前缀代表模块：
- *   ST 存储层；CS 缓存层；TB 表；CT 目录；LX 词法；SY 语法；SE 语义；PL 计划；EX 执行；SV 服务端。
+ *
+ * <p>错误码的唯一来源是 {@link ErrorCode}：一个码只有一种含义，码与含义在类型上绑死。
+ * 展示格式为 {@code ✗ [CODE] message}，协议层（{@code Encoder.encodeError}）直接把
+ * {@link #toString()} 发给客户端，所以这个格式改动会波及线上传输与文档里的逐字输出。
  */
 public class Error extends RuntimeException {
 
-    private final String code;
+    private final ErrorCode code;
 
-    public Error(String code, String message) {
+    public Error(ErrorCode code, String message) {
         super(message);
         this.code = code;
     }
 
-    public Error(String code, String message, Throwable cause) {
+    public Error(ErrorCode code, String message, Throwable cause) {
         super(message, cause);
         this.code = code;
     }
 
+    /** 码字面量，如 "SE-0004"。测试断言与线上传输都依赖它保持 String。 */
     public String code() {
+        return code.code();
+    }
+
+    /** 枚举形态的码，需要查 {@link ErrorCode#meaning()} 时用。 */
+    public ErrorCode errorCode() {
         return code;
     }
 
-    /** 拼接最简展示：✗ [CODE] message */
-    @Override
-    public String toString() {
-        return "✗ [" + code + "] " + getMessage();
+    /** 一句话含义，便于日志里直接看懂是哪类问题。 */
+    public String meaning() {
+        return code.meaning();
     }
 
-    // 常用构造简写，避免写死错误码时遗漏
-    public static Error st(String m) { return new Error("ST-0001", m); }
-    public static Error cs(String m) { return new Error("CS-0001", m); }
-    public static Error tb(String m) { return new Error("TB-0001", m); }
-    public static Error ct(String m) { return new Error("CT-0001", m); }
+    /** 拼接最简展示：✗ [CODE] message */
+    @Override public String toString() {
+        return "✗ [" + code.code() + "] " + getMessage();
+    }
 }

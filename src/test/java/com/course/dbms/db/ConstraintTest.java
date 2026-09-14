@@ -123,14 +123,14 @@ public class ConstraintTest {
     }
 
     @Test public void defaultNullOnNotNullColumnIsRejected() {
-        fails("SE-0005", "create table bad1 (a int32 not null default null)");
+        fails("SE-0027", "create table bad1 (a int32 not null default null)");
     }
 
     /** DEFAULT 1.5 给 int32 必须报错：cast 会把它静默截断成 1，所以走 parseLiteral。 */
     @Test public void defaultLiteralTypeMismatchIsRejected() {
-        fails("SE-0005", "create table bad2 (a int32 default 1.5)");
-        fails("SE-0005", "create table bad3 (a int32 default 'abc')");
-        fails("SE-0005", "create table bad5 (a bool default 3)");
+        fails("SE-0026", "create table bad2 (a int32 default 1.5)");
+        fails("SE-0026", "create table bad3 (a int32 default 'abc')");
+        fails("SE-0026", "create table bad5 (a bool default 3)");
         // STRING 例外：parseLiteral 对未加引号的文本是宽容的（当字符串用），18 是合法默认值
         s.execute("create table okstr (a string default 18)");
     }

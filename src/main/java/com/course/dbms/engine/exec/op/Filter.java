@@ -1,6 +1,7 @@
 package com.course.dbms.engine.exec.op;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.engine.table.Row;
 import com.course.dbms.engine.table.Schema;
@@ -22,7 +23,8 @@ public class Filter extends Operator {
     public Filter(Operator child, Schema schema, Cond cond) {
         this(child, schema, (q, n) -> {
             int i = schema.indexOf(n);
-            if (i < 0) throw new Error("SE-0004", "列不存在: " + n);
+            if (i < 0) throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                    "列不存在: " + n + "（该表列为 " + schema.columnNames() + "）");
             return i;
         }, cond);
     }

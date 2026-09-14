@@ -1,6 +1,7 @@
 package com.course.dbms.compiler;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.ast.ColRef;
 import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
@@ -81,6 +82,14 @@ public class Parser {
         return s;
     }
 
+    /**
+     * 语句的起始关键字。报错里的候选集从这里取，不再手写一遍字符串 ——
+     * 与下面 switch 的分支一一对应，改了分支忘了改提示这种事就不会发生。
+     */
+    private static final TokenType[] STMT_STARTERS = {
+            TokenType.CREATE, TokenType.INSERT, TokenType.SELECT, TokenType.DELETE, TokenType.UPDATE,
+            TokenType.SHOW, TokenType.BEGIN, TokenType.COMMIT, TokenType.ROLLBACK };
+
     private Stmt parseStatement() {
         switch (peek().type) {
             case CREATE:   return parseCreate();
@@ -93,7 +102,7 @@ public class Parser {
             case COMMIT:   return parseTx(TxOp.COMMIT);
             case ROLLBACK: return parseTx(TxOp.ROLLBACK);
             default: throw err(peek(), "unexpected token: '" + peek().text
-                    + "', expected statement: CREATE | INSERT | SELECT | DELETE | UPDATE | SHOW | BEGIN | COMMIT | ROLLBACK");
+                    + "', expected statement: " + describeAll(STMT_STARTERS));
         }
     }
 
@@ -486,12 +495,17 @@ public class Parser {
         for (TokenType tt : tts) {
             if (peek().type == tt) return next();
         }
+        throw err(peek(), "unexpected token: '" + peek().text + "', expected: " + describeAll(tts));
+    }
+
+    /** 把一组候选符号渲染成 "A | B | C"（expectAny 与 parseStatement 共用）。 */
+    private static String describeAll(TokenType... tts) {
         StringBuilder exp = new StringBuilder();
         for (int k = 0; k < tts.length; k++) {
             if (k > 0) exp.append(" | ");
             exp.append(describe(tts[k]));
         }
-        throw err(peek(), "unexpected token: '" + peek().text + "', expected: " + exp);
+        return exp.toString();
     }
 
     /** TokenType 的展示名：标点用符号本身，其余用枚举名（课程错误诊断格式）。 */
@@ -512,6 +526,6 @@ public class Parser {
     private Error err(Token t, String msg) {
         String at = t.line > 0 ? (" at line " + t.line + ", column " + t.column)
                 : (" at " + t.pos);
-        return new Error("SY-0001", msg + at);
+        return new Error(ErrorCode.SY_SYNTAX, msg + at);
     }
 }

@@ -1,5 +1,7 @@
 package com.course.dbms.storage;
 
+import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.common.Log;
 
 /**
@@ -12,7 +14,10 @@ public abstract class AbstractCache implements Cache {
     private long misses;
 
     protected AbstractCache(int capacity) {
-        if (capacity <= 0) throw new IllegalArgumentException("cache capacity must be > 0");
+        if (capacity <= 0) {
+            throw new Error(ErrorCode.CS_CACHE_CAPACITY,
+                    "cache capacity must be > 0, got " + capacity + "（缓存容量必须是正整数）");
+        }
         this.capacity = capacity;
     }
 

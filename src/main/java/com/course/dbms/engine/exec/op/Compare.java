@@ -1,6 +1,7 @@
 package com.course.dbms.engine.exec.op;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 /**
  * 值比较与谓词判定。数值类型统一按 double 比较，布尔按布尔序，其余按字符串序。
@@ -48,7 +49,8 @@ public final class Compare {
             case ">":  return c > 0;
             case "<=": return c <= 0;
             case ">=": return c >= 0;
-            default: throw new Error("EX-0001", "unknown operator: " + op);
+            default: throw new Error(ErrorCode.EX_UNKNOWN_OPERATOR,
+                    "unknown operator: " + op + "（未知的比较运算符：可用的只有 = <> < > <= >=）");
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.course.dbms.engine.table;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +43,8 @@ public enum FieldType {
             case BOOL: return new byte[] { (byte) ((Boolean) v ? 1 : 0) };
             case STRING: return ((String) v).getBytes(StandardCharsets.UTF_8);
             case DATETIME: return ByteBuffer.allocate(8).putLong((Long) v).array();
-            default: throw Error.st("unknown type encode: " + this);
+            default: throw new Error(ErrorCode.ST_FIELD_ENCODE_UNKNOWN,
+                    "unknown type encode: " + this + "（编码失败：未知的字段类型，属于内部错误）");
         }
     }
 
@@ -55,7 +57,8 @@ public enum FieldType {
             case BOOL: return buf[off] != 0;
             case STRING: return new String(buf, off, len, StandardCharsets.UTF_8);
             case DATETIME: return ByteBuffer.wrap(buf, off, 8).getLong();
-            default: throw Error.st("unknown type decode: " + this);
+            default: throw new Error(ErrorCode.ST_FIELD_DECODE_UNKNOWN,
+                    "unknown type decode: " + this + "（解码失败：未知的字段类型，属于内部错误）");
         }
     }
 
@@ -66,7 +69,7 @@ public enum FieldType {
      *
      * 原文形态：{@code 'abc'} 字符串字面量（带引号）、{@code 123} 数值、
      * {@code true}/{@code false} 布尔、{@code NULL} 空值。
-     * 与列类型不匹配（如给 int32 写 1.5）抛 SE-0005 —— 注意不能只靠
+     * 与列类型不匹配（如给 int32 写 1.5）抛 SE-0026 —— 注意不能只靠
      * {@link #encode} 或 StorageEngine.cast 兜底：cast 会把 1.5 静默截断成 1。
      */
     public Object parseLiteral(String text) {
@@ -92,7 +95,8 @@ public enum FieldType {
                     if (t.equalsIgnoreCase("false")) return Boolean.FALSE;
                     throw mismatch(text);
                 case STRING: return t;               // 宽容：未加引号的文本也当字符串
-                default: throw Error.st("unknown type parseLiteral: " + this);
+                default: throw new Error(ErrorCode.ST_FIELD_PARSE_LITERAL_UNKNOWN,
+                        "unknown type parseLiteral: " + this + "（解析默认值失败：未知的字段类型，属于内部错误）");
             }
         } catch (NumberFormatException e) {
             throw mismatch(text);
@@ -100,20 +104,33 @@ public enum FieldType {
     }
 
     private Error mismatch(String text) {
-        return new Error("SE-0005", "默认值 " + text + " 与列类型 " + sqlName() + " 不匹配");
+        return new Error(ErrorCode.SE_DEFAULT_TYPE_MISMATCH,
+                "DEFAULT 值与列类型不匹配：列类型是 " + sqlName() + "，默认值写的是 " + text);
+    }
+
+    /** 可用类型名列表，用于类型写错时的报错。 */
+    public static String typeNames() {
+        StringBuilder sb = new StringBuilder();
+        for (FieldType t : values()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(t.sqlName());
+        }
+        return sb.toString();
     }
 
     public static FieldType fromName(String name) {
         for (FieldType t : values()) {
             if (t.name().equalsIgnoreCase(name)) return t;
         }
-        throw new Error("SE-0002", "unknown type: " + name);
+        throw new Error(ErrorCode.SE_UNKNOWN_TYPE_NAME,
+                "不支持的字段类型: " + name + "（可用类型: " + typeNames() + "）");
     }
 
     public static FieldType fromTag(byte tag) {
         for (FieldType t : values()) {
             if (t.tag == tag) return t;
         }
-        throw new Error("SE-0003", "unknown field tag: " + tag);
+        throw new Error(ErrorCode.SE_UNKNOWN_FIELD_TAG,
+                "未知的字段类型标签: " + tag + "（数据文件里的类型标记无法识别，可能已损坏）");
     }
 }

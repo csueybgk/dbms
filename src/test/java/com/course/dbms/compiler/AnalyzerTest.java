@@ -205,27 +205,36 @@ public class AnalyzerTest {
 
     /** DEFAULT 必须与列类型相容；`1.5` 给 int32 不能被静默截断成 1。 */
     @Test public void createDefaultTypeMismatch() {
-        assertEquals("SE-0005", bad("create table t1 (a int32 default 1.5)").code());
-        assertEquals("SE-0005", bad("create table t2 (a int32 default 'abc')").code());
-        assertEquals("SE-0005", bad("create table t3 (a bool default 3)").code());
+        assertEquals("SE-0026", bad("create table t1 (a int32 default 1.5)").code());
+        assertEquals("SE-0026", bad("create table t2 (a int32 default 'abc')").code());
+        assertEquals("SE-0026", bad("create table t3 (a bool default 3)").code());
     }
 
     @Test public void createDefaultNullOnNotNullColumn() {
-        assertEquals("SE-0005", bad("create table t1 (a int32 not null default null)").code());
+        assertEquals("SE-0027", bad("create table t1 (a int32 not null default null)").code());
     }
 
     /** INSERT 列清单：列不存在 / 重复，以及列清单与值的个数不符。 */
     @Test public void insertColumnListChecks() {
-        assertEquals("SE-0013", bad("insert into users (nosuch) values (1)").code());
+        assertEquals("SE-0004", bad("insert into users (nosuch) values (1)").code());
         assertEquals("SE-0014", bad("insert into users (id, id) values (1, 2)").code());
-        assertEquals("SE-0003", bad("insert into users (id, name) values (1)").code());
+        // 写了列清单却没给等量的值 —— 与"没写清单、值个数不等于列数"是两件事，各有各的码
+        assertEquals("SE-0029", bad("insert into users (id, name) values (1)").code());
         ok("insert into users (id, name) values (1, 'alice')");        // 其余列补 NULL
         ok("insert into users values (1, 'alice', 23, 90.0)");         // 不给清单仍须按位齐全
     }
 
-    /** 不带列清单时，值的个数仍须严格等于列数（既有断言依赖 SE-0003）。 */
+    /** 不带列清单时，值的个数仍须严格等于列数（SE-0003 专指这种情况）。 */
     @Test public void insertWithoutColumnListStillNeedsExactCount() {
         assertEquals("SE-0003", bad("insert into users values (1, 'alice', 23)").code());
         assertEquals("SE-0003", bad("insert into users values (1, 'alice', 23, 90.0, 5)").code());
+    }
+
+    /**
+     * SE-0005 现在只表示"值本身不是列类型"这一件事（DEFAULT 的两类问题已拆去 SE-0026/0027）。
+     * 这个码仍在使用，所以保留精确断言，别让它变成没人管的孤儿码。
+     */
+    @Test public void insertValueTypeMismatch() {
+        assertEquals("SE-0005", bad("insert into users values ('abc', 'alice', 23, 90.0)").code());
     }
 }

@@ -1,6 +1,7 @@
 package com.course.dbms.compiler;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.ast.ColRef;
 import com.course.dbms.compiler.ast.Cond;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
@@ -84,9 +85,9 @@ public class PlanBuilder {
         if (stmt instanceof ShowStmt) return buildShow((ShowStmt) stmt);
         if (stmt instanceof TxnStmt) {
             // 事务控制语句应由 Session 拦截，不应进入执行计划
-            throw new Error("PL-0002", "transaction control is handled by Session, not the plan");
+            throw new Error(ErrorCode.PL_TXN_NOT_IN_PLAN, "事务控制语句不该进入计划（属于内部错误）");
         }
-        throw new Error("PL-0001", "unknown statement: " + stmt);
+        throw new Error(ErrorCode.SE_UNKNOWN_STATEMENT, "未知的语句类型: " + stmt.getClass().getSimpleName());
     }
 
     private Plan buildCreate(CreateStmt c) {
@@ -105,7 +106,7 @@ public class PlanBuilder {
     private Plan buildInsert(InsertStmt ins) {
         Table table = catalog.getTable(ins.tableName);
         // 与 Analyzer 共用同一套解析：支持可选列清单，缺省列按 DEFAULT / NULL 补全
-        Row row = ConstraintChecker.resolveInsert(table.schema(), ins.columns, ins.values);
+        Row row = ConstraintChecker.resolveInsert(table.name(), table.schema(), ins.columns, ins.values);
         Operator op = new Insert(se, table, row, catalog.indexManager());
         return new Plan(op, Collections.singletonList("affected"));
     }
@@ -195,18 +196,22 @@ public class PlanBuilder {
                         argIdx = csF.resolve(it.arg.qualifier, it.arg.name);
                         argType = csF.typeAt(argIdx);
                     }
-                    aggItems.add(new Aggregate.Item(true, -1, it.func, argIdx, it.arg == null, argType));
+                    aggItems.add(new Aggregate.Item(true, -1, it.func, argIdx, it.arg == null, argType,
+                            it.arg == null ? null : it.arg.display()));
                     names.add(it.outputName());
                 } else {
                     int gp = groupKeyPos(sel.groupBy, csF, it.col);
-                    aggItems.add(new Aggregate.Item(false, gp, null, -1, false, null));
+                    aggItems.add(new Aggregate.Item(false, gp, null, -1, false, null, null));
                     names.add(it.outputName());
                 }
             }
             root = new Aggregate(root, groupIdx, aggItems);
             if (sel.orderBy != null) {
                 int oi = aggOutputIndex(sel.items, sel.orderBy);
-                if (oi < 0) throw new Error("SE-0004", "ORDER BY 列不存在: " + sel.orderBy);
+                if (oi < 0) {
+                    throw new Error(ErrorCode.SE_ORDER_BY_COLUMN_NOT_FOUND,
+                            "ORDER BY 列不存在: " + sel.orderBy);
+                }
                 root = new Sort(root, oi, sel.orderDesc);
             }
             return new Plan(root, names);
@@ -317,7 +322,9 @@ public class PlanBuilder {
         for (int i = 0; i < groupBy.size(); i++) {
             if (sameCol(groupBy.get(i), col)) return i;
         }
-        throw new Error("SE-0006", "非聚合列 " + col.display() + " 必须出现在 GROUP BY 中");
+        throw new Error(ErrorCode.SE_GROUP_BY_MISSING,
+                "非聚合列未出现在 GROUP BY: " + col.display()
+                        + "（有聚合或分组时，其余列必须都写进 GROUP BY）");
     }
 
     private boolean sameCol(ColRef a, ColRef b) {

@@ -2,6 +2,7 @@ package com.course.dbms.storage;
 
 import com.course.dbms.common.Consts;
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 
 import java.io.File;
 import java.io.IOException;
@@ -27,7 +28,8 @@ public class DiskManager {
         this.dir = dir;
         File d = new File(dir);
         if (!d.exists() && !d.mkdirs()) {
-            throw Error.st("cannot create db dir: " + dir);
+            throw new Error(ErrorCode.ST_CREATE_DB_DIR,
+                    "cannot create db dir: " + dir + "（创建数据库目录失败：父目录不存在或没有写权限）");
         }
         addShutdownHook();
     }
@@ -52,13 +54,17 @@ public class DiskManager {
             File path = file(tableId);
             // createNewFile 不覆盖已有文件
             if (!path.exists()) {
-                if (!path.createNewFile()) throw Error.st("cannot create file: " + path);
+                if (!path.createNewFile()) {
+                    throw new Error(ErrorCode.ST_CREATE_TABLE_FILE,
+                            "cannot create file: " + path + "（创建表文件失败：目录不可写或同名文件已存在）");
+                }
             }
             f = new RandomAccessFile(path, "rw");
             files.put(tableId, f);
             return f;
         } catch (IOException e) {
-            throw new Error("ST-0010", "open file failed: " + file(tableId), e);
+            throw new Error(ErrorCode.ST_OPEN_FILE,
+                    "open file failed: " + file(tableId) + "（打开表文件失败：文件被其它进程占用或权限不足）", e);
         }
     }
 
@@ -67,7 +73,7 @@ public class DiskManager {
         try {
             return (int) (raf(tableId).length() / Page.SIZE);
         } catch (IOException e) {
-            throw new Error("ST-0011", "read length failed", e);
+            throw new Error(ErrorCode.ST_READ_LENGTH, "read length failed（读取表文件长度失败：文件句柄可能已失效）", e);
         }
     }
 
@@ -92,19 +98,27 @@ public class DiskManager {
             f.readFully(buf);
             return buf;
         } catch (IOException e) {
-            throw new Error("ST-0012", "read page failed: " + tableId + "#" + pageNo, e);
+            throw new Error(ErrorCode.ST_READ_PAGE,
+                    "read page failed: table " + tableId + " page " + pageNo
+                            + "（读取数据页失败：数据库文件可能已损坏）", e);
         }
     }
 
     /** 写一页（覆盖）。RandomAccessFile 在"超出 EOF 处写"会自动扩展文件，供事务提交写新页。 */
     public synchronized void writePage(int tableId, int pageNo, byte[] data) {
-        if (data.length != Page.SIZE) throw Error.st("page size mismatch on write");
+        if (data.length != Page.SIZE) {
+            throw new Error(ErrorCode.ST_PAGE_SIZE_MISMATCH_WRITE,
+                    "page size mismatch on write: expected " + Page.SIZE + ", got " + data.length
+                            + "（写入的页长度不是标准页大小，属于内部错误）");
+        }
         try {
             RandomAccessFile f = raf(tableId);
             f.seek((long) pageNo * Page.SIZE);
             f.write(data);
         } catch (IOException e) {
-            throw new Error("ST-0013", "write page failed: " + tableId + "#" + pageNo, e);
+            throw new Error(ErrorCode.ST_WRITE_PAGE,
+                    "write page failed: table " + tableId + " page " + pageNo
+                            + "（写入数据页失败：磁盘可能已满或文件不可写）", e);
         }
     }
 
@@ -120,10 +134,13 @@ public class DiskManager {
         try {
             RandomAccessFile f = raf(tableId);
             long newLen = f.length() - Page.SIZE;
-            if (newLen < 0) throw Error.st("cannot truncate below zero");
+            if (newLen < 0) {
+                throw new Error(ErrorCode.ST_TRUNCATE_BELOW_ZERO,
+                        "cannot truncate below zero（表已经是空文件，没有尾页可释放）");
+            }
             f.setLength(newLen);
         } catch (IOException e) {
-            throw new Error("ST-0014", "truncate failed", e);
+            throw new Error(ErrorCode.ST_TRUNCATE, "truncate failed（截断表文件失败：文件不可写）", e);
         }
     }
 

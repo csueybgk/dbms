@@ -1,6 +1,7 @@
 package com.course.dbms.engine.table;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.engine.index.Index;
 import com.course.dbms.engine.index.IndexManager;
 import com.course.dbms.engine.storage.StorageEngine;
@@ -94,7 +95,6 @@ public class Catalog {
         for (Row r : se.scan(sysIndexes)) {
             int tid = (Integer) r.get(0);
             String name = (String) r.get(1);
-            String column = (String) r.get(2);
             int cid = (Integer) r.get(3);
             Table t = tableById(tid);
             if (t == null) continue;                            // 表已被删（本系统无 drop，防御性）
@@ -114,7 +114,7 @@ public class Catalog {
     public Table createTable(String name, Schema schema) {
         String key = name.toLowerCase();
         if (tables.containsKey(key)) {
-            throw new Error("CT-0002", "table already exists: " + name);
+            throw new Error(ErrorCode.CT_TABLE_EXISTS, "表已存在: " + name + "（换个表名或先 drop 掉）");
         }
         int tid = nextTableId();
         se.insert(sysTables, Row.of(tid, name));
@@ -140,10 +140,12 @@ public class Catalog {
         Table t = getTable(tableName);                       // TB-0001 if missing
         int cid = t.schema().indexOf(columnName);
         if (cid < 0) {
-            throw new Error("SE-0004", "列不存在: " + columnName + "（表 " + t.name() + "）");
+            throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                    "索引的列不存在: " + columnName + "（表 " + t.name() + "；该表列为 "
+                            + t.schema().columnNames() + "）");
         }
         if (hasIndex(name)) {
-            throw new Error("SE-0007", "索引名已存在: " + name);
+            throw new Error(ErrorCode.SE_INDEX_EXISTS, "索引名已存在: " + name);
         }
         se.insert(sysIndexes, Row.of(t.tableId(), name, t.schema().column(cid).name(), cid));
         return indexManager.createIndex(name, t, cid);
@@ -164,10 +166,21 @@ public class Catalog {
         return indexManager;
     }
 
+    /** 用户表名清单，用于"表不存在"时报出候选（系统表不列，用户建不了也 drop 不掉）。 */
+    public String tableNames() {
+        List<String> names = new ArrayList<>();
+        for (Table t : tables.values()) {
+            if (t.tableId() >= FIRST_USER_ID) names.add(t.name());
+        }
+        java.util.Collections.sort(names);
+        return names.isEmpty() ? "（空库，还没有表）" : String.join(", ", names);
+    }
+
     public Table getTable(String name) {
         Table t = tables.get(name.toLowerCase());
         if (t == null) {
-            throw new Error("TB-0001", "table not found: " + name);
+            throw new Error(ErrorCode.TB_TABLE_NOT_FOUND,
+                    "表不存在: " + name + "（当前库中有: " + tableNames() + "）");
         }
         return t;
     }

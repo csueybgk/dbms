@@ -1,6 +1,7 @@
 package com.course.dbms.db;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.compiler.ast.CreateIndexStmt;
 import com.course.dbms.compiler.ast.CreateStmt;
 import com.course.dbms.compiler.ast.InsertStmt;
@@ -62,7 +63,8 @@ public class Session {
         switch (t.op) {
             case BEGIN:
                 if (Txn.current() != null && Txn.current().active()) {
-                    throw new Error("TX-0002", "已在事务中，请先 COMMIT 或 ROLLBACK");
+                    throw new Error(ErrorCode.TX_ALREADY_IN_TXN,
+                            "已在事务中: 不能重复 BEGIN（请先 COMMIT 或 ROLLBACK 再开新事务）");
                 }
                 Txn tx = new Txn(locks.nextId());
                 tx.setState(Txn.State.ACTIVE);
@@ -86,14 +88,16 @@ public class Session {
                 cur2.setState(Txn.State.ABORTED);
                 return Result.message("transaction rolled back");
             default:
-                throw new Error("TX-0005", "unknown transaction op: " + t.op);
+                throw new Error(ErrorCode.TX_UNKNOWN_OP,
+                        "unknown transaction op: " + t.op + "（未知的事务操作，属于内部错误）");
         }
     }
 
     private void requireActive() {
         Txn cur = Txn.current();
         if (cur == null || !cur.active()) {
-            throw new Error("TX-0001", "没有活动事务");
+            throw new Error(ErrorCode.TX_NO_ACTIVE_TXN,
+                    "没有活动事务: 这条语句要求先 BEGIN（COMMIT / ROLLBACK 只能在事务里执行）");
         }
     }
 

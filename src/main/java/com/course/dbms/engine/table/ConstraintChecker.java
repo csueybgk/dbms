@@ -1,6 +1,7 @@
 package com.course.dbms.engine.table;
 
 import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.engine.exec.op.CondEval;
 import com.course.dbms.engine.storage.StorageEngine;
 
@@ -39,11 +40,13 @@ public final class ConstraintChecker {
      *   - 写了列清单：值只覆盖清单里的列，其余列取 DEFAULT，没有 DEFAULT 则填 NULL。
      * Analyzer 与 PlanBuilder 都调它，保证"预检"和"落地"用同一套解析口径。
      */
-    public static Row resolveInsert(Schema schema, List<String> insertCols, List<Object> values) {
+    public static Row resolveInsert(String tableName, Schema schema, List<String> insertCols, List<Object> values) {
         int n = schema.columnCount();
         if (insertCols == null) {
             if (values.size() != n) {
-                throw new Error("SE-0003", "值个数与列数不一致: 列 " + n + " 个, 给了 " + values.size() + " 个");
+                throw new Error(ErrorCode.SE_INSERT_VALUE_COUNT,
+                        "插入值个数与列数不一致：表 " + tableName + " 有 " + n
+                                + " 列，给了 " + values.size() + " 个值");
             }
             List<Object> vals = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
@@ -53,8 +56,9 @@ public final class ConstraintChecker {
         }
 
         if (insertCols.size() != values.size()) {
-            throw new Error("SE-0003", "值个数与列清单个数不一致: 列清单 " + insertCols.size()
-                    + " 个, 给了 " + values.size() + " 个值");
+            throw new Error(ErrorCode.SE_INSERT_COLUMN_COUNT,
+                    "插入值个数与列清单个数不一致：表 " + tableName + " 的列清单写了 "
+                            + insertCols.size() + " 个列，却给了 " + values.size() + " 个值");
         }
         Object[] slots = new Object[n];
         boolean[] provided = new boolean[n];
@@ -63,10 +67,13 @@ public final class ConstraintChecker {
             String name = insertCols.get(k);
             int idx = schema.indexOf(name);
             if (idx < 0) {
-                throw new Error("SE-0013", "列不存在: " + name);
+                throw new Error(ErrorCode.SE_COLUMN_NOT_FOUND,
+                        "列不存在: " + name + "（表 " + tableName + "；该表列为 "
+                                + schema.columnNames() + "）");
             }
             if (!seen.add(name.toLowerCase())) {
-                throw new Error("SE-0014", "列清单里有重复列: " + name);
+                throw new Error(ErrorCode.SE_INSERT_COLUMN_DUPLICATE,
+                        "INSERT 列清单里有重复列: " + name + "（表 " + tableName + " 的列清单里出现了两次）");
             }
             slots[idx] = StorageEngine.cast(schema, idx, values.get(k));
             provided[idx] = true;
@@ -89,19 +96,21 @@ public final class ConstraintChecker {
      */
     public void check(Table table, Row row, StorageEngine.Located self, List<StorageEngine.Located> snapshot) {
         Schema schema = table.schema();
-        checkNotNull(schema, row);
+        checkNotNull(table, row);
         checkChecks(table, schema, row);
-        checkUnique(schema, row, self, snapshot);
+        checkUnique(table, row, self, snapshot);
     }
 
     /** NOT NULL / PRIMARY KEY 的非空性（PRIMARY KEY 隐含 NOT NULL）。 */
-    private void checkNotNull(Schema schema, Row row) {
+    private void checkNotNull(Table table, Row row) {
+        Schema schema = table.schema();
         for (Constraint c : schema.constraints()) {
             if (c.kind() != Constraint.Kind.NOT_NULL && c.kind() != Constraint.Kind.PRIMARY_KEY) continue;
             for (String col : c.columns()) {
                 int i = schema.indexOf(col);
                 if (i >= 0 && row.get(i) == null) {
-                    throw new Error("SE-0010", "列 " + col + " 不能为 NULL（" + c.describe() + "）");
+                    throw new Error(ErrorCode.SE_NOT_NULL_VIOLATION,
+                            "列不能为 NULL: " + col + "（表 " + table.name() + " 的 " + c.describe() + "）");
                 }
             }
         }
@@ -121,29 +130,33 @@ public final class ConstraintChecker {
                 for (Column col : schema.columns()) cs.add(table.name(), col.name(), col.type());
             }
             if (Boolean.FALSE.equals(CondEval.evalTri(c.cond(), cs.toSchema(), row, cs::resolve))) {
-                throw new Error("SE-0012", "违反 CHECK 约束: " + c.detail());
+                throw new Error(ErrorCode.SE_CHECK_VIOLATION,
+                        "违反 CHECK 约束: " + c.detail() + "（表 " + table.name() + "）");
             }
         }
     }
 
     /** UNIQUE / PRIMARY KEY 的唯一性。键里含 NULL 时按 SQL 语义跳过（NULL 互不相等）。 */
-    private void checkUnique(Schema schema, Row row, StorageEngine.Located self,
+    private void checkUnique(Table table, Row row, StorageEngine.Located self,
                              List<StorageEngine.Located> snapshot) {
+        Schema schema = table.schema();
         for (Constraint c : schema.constraints()) {
             if (c.kind() != Constraint.Kind.UNIQUE && c.kind() != Constraint.Kind.PRIMARY_KEY) continue;
             List<Object> key = keyOf(schema, row, c);
             if (key == null) continue;                                   // 含 NULL，不参与判重
             if (!accepted.add(key)) {
-                throw new Error("SE-0011", "违反唯一性约束 " + c.describe() + " (" + String.join(", ", c.columns())
-                        + "): 同一语句内出现重复值 " + key);
+                throw new Error(ErrorCode.SE_UNIQUE_VIOLATION,
+                        "违反唯一性约束 " + c.describe() + " (" + String.join(", ", c.columns())
+                                + "): 同一语句内出现重复值 " + key + "（表 " + table.name() + "）");
             }
             if (snapshot == null) continue;
             for (StorageEngine.Located other : snapshot) {
                 if (self != null && other.pageNo() == self.pageNo() && other.slot() == self.slot()) continue;
                 List<Object> otherKey = keyOf(schema, other.row(), c);
                 if (otherKey != null && otherKey.equals(key)) {
-                    throw new Error("SE-0011", "违反唯一性约束 " + c.describe() + " (" + String.join(", ", c.columns())
-                            + "): 已存在相同的值 " + key);
+                    throw new Error(ErrorCode.SE_UNIQUE_VIOLATION,
+                            "违反唯一性约束 " + c.describe() + " (" + String.join(", ", c.columns())
+                                    + "): 已存在相同的值 " + key + "（表 " + table.name() + "）");
                 }
             }
         }

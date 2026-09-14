@@ -1,5 +1,7 @@
 package com.course.dbms.client;
 
+import com.course.dbms.common.Error;
+import com.course.dbms.common.ErrorCode;
 import com.course.dbms.protocol.Decoder;
 import com.course.dbms.protocol.Package;
 import com.course.dbms.protocol.Packager;
@@ -83,7 +85,13 @@ public class Shell {
 
     /** 批处理 -f：执行文件中所有语句。 */
     public void executeFile(String path) throws IOException {
-        String content = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+        String content;
+        try {
+            content = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new Error(ErrorCode.CL_SCRIPT_READ_FAILED,
+                    "读取 SQL 脚本文件失败: " + path + "（文件不存在，或没有读权限）", e);
+        }
         buf.setLength(0);
         buf.append(content).append('\n');
         drain();
@@ -96,9 +104,18 @@ public class Shell {
     /** 发送一条完整语句并渲染结果；开 trace 时先回显编译四阶段输出再渲染结果。 */
     private void send(String sql) throws IOException {
         if (traceOn) sql = "trace " + sql;
-        Packager.write(out, new Package(false, sql.getBytes(StandardCharsets.UTF_8)));
+        try {
+            Packager.write(out, new Package(false, sql.getBytes(StandardCharsets.UTF_8)));
+        } catch (IOException e) {
+            throw connectionLost(e);
+        }
         while (true) {
-            Package pkg = Packager.read(in);
+            Package pkg;
+            try {
+                pkg = Packager.read(in);
+            } catch (IOException e) {
+                throw connectionLost(e);
+            }
             if (pkg.trace) {
                 // 编译四阶段中间输出：Token流 -> AST -> 语义 -> 计划
                 System.out.println(new String(pkg.payload, StandardCharsets.UTF_8));
@@ -111,6 +128,12 @@ public class Shell {
             }
             break;
         }
+    }
+
+    /** 与服务端的往返中断（写不进去或读不出来）。服务端退出、网络断开都会走这里。 */
+    private static Error connectionLost(IOException e) {
+        return new Error(ErrorCode.CL_CONNECTION_LOST,
+                "与服务端的连接中断: " + e.getMessage() + "（服务端可能已退出，或网络断开）", e);
     }
 
     /** 把缓冲里所有到分号为止的完整语句抽出并发送。 */
